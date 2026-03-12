@@ -9,10 +9,18 @@ class RepoRepository {
 
     private val api get() = ApiClient.api
 
-    // ─── 简单内存缓存 ───
+    // ─── 内存缓存 ─────────────────────────────────────────────────────────────
     private var reposCache: List<GHRepo>? = null
     private var reposCacheTime: Long = 0
-    private val CACHE_TTL = 5 * 60 * 1000L   // 5 分钟
+    private val CACHE_TTL = 5 * 60 * 1000L           // 5 分钟（列表）
+    private val DETAIL_TTL = 60 * 1000L               // 60 秒（详情）
+
+    private data class Entry<T>(val data: T, val ts: Long = System.currentTimeMillis()) {
+        fun valid(ttl: Long = 60_000L) = System.currentTimeMillis() - ts < ttl
+    }
+    private val repoDetailCache = java.util.concurrent.ConcurrentHashMap<String, Entry<GHRepo>>()
+    private val branchCache     = java.util.concurrent.ConcurrentHashMap<String, Entry<List<GHBranch>>>()
+    private val commitCache     = java.util.concurrent.ConcurrentHashMap<String, Entry<List<GHCommit>>>()
 
     // ─── 用户 / 仓库 ───
 
@@ -40,8 +48,12 @@ class RepoRepository {
         api.getUserOrgs()
     }
 
-    suspend fun getRepo(owner: String, repo: String): GHRepo = withContext(Dispatchers.IO) {
-        api.getRepo(owner, repo)
+    suspend fun getRepo(owner: String, repo: String, forceRefresh: Boolean = false): GHRepo = withContext(Dispatchers.IO) {
+        val key = "$owner/$repo"
+        if (!forceRefresh) repoDetailCache[key]?.takeIf { it.valid(DETAIL_TTL) }?.data?.let { return@withContext it }
+        val result = api.getRepo(owner, repo)
+        repoDetailCache[key] = Entry(result)
+        result
     }
 
     suspend fun createRepo(body: GHCreateRepoRequest): GHRepo = withContext(Dispatchers.IO) {
@@ -82,16 +94,28 @@ class RepoRepository {
 
     // ─── Commits ───
 
-    suspend fun getCommits(owner: String, repo: String, sha: String): List<GHCommit> =
-        withContext(Dispatchers.IO) { api.getCommits(owner, repo, sha) }
+    suspend fun getCommits(owner: String, repo: String, sha: String, forceRefresh: Boolean = false): List<GHCommit> =
+        withContext(Dispatchers.IO) {
+            val key = "$owner/$repo/$sha"
+            if (!forceRefresh) commitCache[key]?.takeIf { it.valid(30_000L) }?.data?.let { return@withContext it }
+            val result = api.getCommits(owner, repo, sha)
+            commitCache[key] = Entry(result)
+            result
+        }
 
     suspend fun getCommitDetail(owner: String, repo: String, sha: String): GHCommitFull =
         withContext(Dispatchers.IO) { api.getCommitFull(owner, repo, sha) }
 
     // ─── Branches ───
 
-    suspend fun getBranches(owner: String, repo: String): List<GHBranch> =
-        withContext(Dispatchers.IO) { api.getBranches(owner, repo) }
+    suspend fun getBranches(owner: String, repo: String, forceRefresh: Boolean = false): List<GHBranch> =
+        withContext(Dispatchers.IO) {
+            val key = "$owner/$repo"
+            if (!forceRefresh) branchCache[key]?.takeIf { it.valid(DETAIL_TTL) }?.data?.let { return@withContext it }
+            val result = api.getBranches(owner, repo)
+            branchCache[key] = Entry(result)
+            result
+        }
 
     suspend fun createBranch(owner: String, repo: String, name: String, fromSha: String): GHRef =
         withContext(Dispatchers.IO) {

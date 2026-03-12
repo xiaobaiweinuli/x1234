@@ -17,6 +17,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.*
 import androidx.navigation.compose.*
 import com.gitmob.android.auth.ThemeMode
+import com.gitmob.android.api.ApiClient
 import com.gitmob.android.auth.TokenStorage
 import com.gitmob.android.data.RepoRepository
 import com.gitmob.android.ui.common.ErrorBox
@@ -66,9 +67,18 @@ fun AppNavGraph(
     onThemeChange: (ThemeMode) -> Unit,
 ) {
     val navController = rememberNavController()
-    var startDest by remember { mutableStateOf<String?>(null) }
+    var startDest  by remember { mutableStateOf<String?>(null) }
+    var isReauth   by remember { mutableStateOf(false) }
     val currentTheme by tokenStorage.themeMode.collectAsState(initial = ThemeMode.LIGHT)
     val rootEnabled by tokenStorage.rootEnabled.collectAsState(initial = false)
+
+    // 监听 401 Token 失效事件（OAuth App 管理员主动撤销时）
+    LaunchedEffect(Unit) {
+        ApiClient.tokenExpired.collect {
+            startDest = Route.Login.path
+            navController.navigate(Route.Login.path) { popUpTo(0) { inclusive = true } }
+        }
+    }
 
     LaunchedEffect(Unit) {
         val token = tokenStorage.accessToken.first()
@@ -81,6 +91,7 @@ fun AppNavGraph(
         composable(Route.Login.path) {
             LoginScreen(
                 pendingToken = initialToken,
+                isReauth = isReauth,
                 onSuccess = {
                     navController.navigate(Route.Main.path) {
                         popUpTo(Route.Login.path) { inclusive = true }
@@ -105,6 +116,7 @@ fun AppNavGraph(
                 onCreateRepo = { navController.navigate(Route.CreateRepo.path) },
                 localVm      = localVm,
                 onLogout     = {
+                    isReauth = true
                     navController.navigate(Route.Login.path) { popUpTo(0) { inclusive = true } }
                 },
             )

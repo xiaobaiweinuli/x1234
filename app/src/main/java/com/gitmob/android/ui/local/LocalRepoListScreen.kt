@@ -62,21 +62,6 @@ fun LocalRepoListScreen(
         return
     }
 
-    // 克隆目标路径选择器
-    if (state.showClonePicker) {
-        FilePickerScreen(
-            title = "选择克隆目标目录",
-            mode = PickerMode.DIRECTORY,
-            rootEnabled = rootEnabled,
-            customBookmarks = customBookmarks,
-            onAddBookmark    = { bm -> vm.addBookmark(bm) },
-            onRemoveBookmark = { bm -> vm.removeBookmark(bm) },
-            onConfirm = { path, _ -> vm.cloneRepo(state.pendingCloneUrl, path) },
-            onDismiss = vm::hideClonePicker,
-        )
-        return
-    }
-
     // 新建本地项目：先选父目录
     if (showNewProjectPicker) {
         FilePickerScreen(

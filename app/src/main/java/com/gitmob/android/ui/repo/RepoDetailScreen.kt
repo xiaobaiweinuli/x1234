@@ -31,6 +31,12 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.gitmob.android.api.*
 import com.gitmob.android.ui.common.*
 import com.gitmob.android.ui.theme.*
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.border
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
+import androidx.compose.material3.rememberModalBottomSheetState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -175,7 +181,7 @@ fun RepoDetailScreen(
     }
     // Commit 详情 Modal
     state.selectedCommit?.let { commit ->
-        CommitDetailSheet(commit = commit, c = c, onDismiss = vm::clearCommitDetail)
+        CommitDetailSheet(commit = commit, c = c, vm = vm, onDismiss = vm::clearCommitDetail)
     }
 }
 
@@ -411,18 +417,71 @@ fun IssuesTab(issues: List<GHIssue>, c: GmColors) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CommitDetailSheet(commit: GHCommitFull, c: GmColors, onDismiss: () -> Unit) {
+@OptIn(ExperimentalMaterial3Api::class)
+fun CommitDetailSheet(
+    commit: GHCommitFull,
+    c: GmColors,
+    vm: RepoDetailViewModel,
+    onDismiss: () -> Unit,
+) {
     val context = LocalContext.current
+    val state by vm.state.collectAsState()
+    var showResetDialog by remember { mutableStateOf(false) }
+
+    // ── Diff 查看器（二级 Sheet）──────────────────────────────────────────
+    state.selectedFilePatch?.let { (filename, patch) ->
+        FileDiffSheet(
+            filename = filename,
+            patch = patch,
+            c = c,
+            onDismiss = vm::closeFilePatch,
+        )
+    }
+
+    // ── Reset 对话框 ───────────────────────────────────────────────────────
+    if (showResetDialog) {
+        ResetCommitDialog(
+            sha = commit.sha,
+            shortSha = commit.shortSha,
+            c = c,
+            onConfirm = { sha, mode ->
+                // Reset 是本地 git 操作，需要通过 LocalRepoViewModel
+                // 这里仅复制 SHA 到剪贴板并提示用户（远程仓库详情无本地路径）
+                val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                        as android.content.ClipboardManager
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("sha", sha))
+                android.widget.Toast.makeText(
+                    context, "已复制 SHA：${sha.take(7)}\n在「本地」Tab 执行 git reset --$mode $sha",
+                    android.widget.Toast.LENGTH_LONG).show()
+                showResetDialog = false
+            },
+            onDismiss = { showResetDialog = false },
+        )
+    }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         containerColor = c.bgCard,
         dragHandle = { BottomSheetDefaults.DragHandle(color = c.border) },
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
     ) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 24.dp)) {
-            // Header
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(commit.shortSha, fontSize = 12.sp, color = Coral, fontFamily = FontFamily.Monospace,
-                    modifier = Modifier.background(CoralDim, RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 2.dp))
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 32.dp),
+        ) {
+            // ── Header ──────────────────────────────────────────────────
+            Row(verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    commit.shortSha,
+                    fontSize = 12.sp, color = Coral, fontFamily = FontFamily.Monospace,
+                    modifier = Modifier
+                        .background(CoralDim, RoundedCornerShape(4.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                )
                 Spacer(Modifier.weight(1f))
                 if (commit.stats != null) {
                     Text("+${commit.stats.additions}", fontSize = 12.sp, color = Green)
@@ -430,9 +489,11 @@ fun CommitDetailSheet(commit: GHCommitFull, c: GmColors, onDismiss: () -> Unit) 
                 }
             }
             Spacer(Modifier.height(10.dp))
-            Text(commit.commit.message, fontSize = 14.sp, color = c.textPrimary, lineHeight = 22.sp, fontWeight = FontWeight.Medium)
+            Text(commit.commit.message, fontSize = 14.sp, color = c.textPrimary,
+                lineHeight = 22.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically) {
                 if (commit.author != null) AvatarImage(commit.author.avatarUrl, 20)
                 Text(commit.commit.author.name, fontSize = 12.sp, color = c.textSecondary)
                 Text("·", color = c.textTertiary)
@@ -442,48 +503,101 @@ fun CommitDetailSheet(commit: GHCommitFull, c: GmColors, onDismiss: () -> Unit) 
             GmDivider()
             Spacer(Modifier.height(12.dp))
 
-            // 文件列表
+            // ── 变更文件列表（可点击查看 diff）──────────────────────────
             commit.files?.let { files ->
-                Text("变更文件 (${files.size})", fontSize = 12.sp, color = c.textSecondary, fontWeight = FontWeight.Medium)
+                Row(verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("变更文件 (${files.size})", fontSize = 12.sp,
+                        color = c.textSecondary, fontWeight = FontWeight.Medium)
+                    Text("· 点击查看 diff", fontSize = 11.sp, color = c.textTertiary)
+                }
                 Spacer(Modifier.height(8.dp))
                 files.forEach { file ->
-                    val (statusColor, statusLabel) = when(file.status) {
-                        "added"    -> Green to "A"
+                    val (statusColor, statusLabel) = when (file.status) {
+                        "added"    -> Green    to "A"
                         "removed"  -> RedColor to "D"
-                        "modified" -> Yellow to "M"
+                        "modified" -> Yellow   to "M"
                         "renamed"  -> BlueColor to "R"
                         else       -> c.textTertiary to "?"
                     }
+                    val hasPatch = !file.patch.isNullOrBlank()
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                if (hasPatch) c.bgItem else Color.Transparent,
+                                RoundedCornerShape(8.dp),
+                            )
+                            .then(
+                                if (hasPatch) Modifier.clickable {
+                                    vm.openFilePatch(file.filename, file.patch!!)
+                                } else Modifier
+                            )
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Text(statusLabel, fontSize = 11.sp, color = statusColor, fontWeight = FontWeight.Bold,
-                            modifier = Modifier.background(statusColor.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
-                                .padding(horizontal = 5.dp, vertical = 1.dp))
-                        Text(file.filename, fontSize = 12.sp, color = c.textPrimary,
-                            fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f), maxLines = 1)
-                        Text("+${file.additions}/-${file.deletions}", fontSize = 11.sp, color = c.textTertiary)
+                        Text(
+                            statusLabel, fontSize = 11.sp, color = statusColor,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier
+                                .background(statusColor.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
+                                .padding(horizontal = 5.dp, vertical = 1.dp),
+                        )
+                        Text(
+                            file.filename, fontSize = 12.sp, color = c.textPrimary,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.weight(1f), maxLines = 1,
+                        )
+                        if (file.additions > 0 || file.deletions > 0) {
+                            Text("+${file.additions}/-${file.deletions}",
+                                fontSize = 11.sp, color = c.textTertiary)
+                        }
+                        if (hasPatch) {
+                            Icon(Icons.Default.ChevronRight, null,
+                                tint = c.textTertiary, modifier = Modifier.size(14.dp))
+                        }
                     }
                 }
             }
 
             Spacer(Modifier.height(16.dp))
-            // 在 GitHub 查看（用于回滚等高级操作）
+            GmDivider()
+            Spacer(Modifier.height(12.dp))
+
+            // ── 操作按钮 ─────────────────────────────────────────────────
+            Text("操作", fontSize = 12.sp, color = c.textSecondary, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.height(8.dp))
+
+            // 回滚 / Reset
+            OutlinedButton(
+                onClick = { showResetDialog = true },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                border = ButtonDefaults.outlinedButtonBorder.copy(
+                    brush = androidx.compose.ui.graphics.SolidColor(Yellow.copy(alpha = 0.6f))),
+            ) {
+                Icon(Icons.Default.Undo, null, tint = Yellow, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("回滚 / Reset 到此提交", fontSize = 14.sp, color = Yellow)
+            }
+            Spacer(Modifier.height(8.dp))
+
+            // 在 GitHub 查看
             OutlinedButton(
                 onClick = {
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(commit.htmlUrl))
-                    context.startActivity(intent)
+                    context.startActivity(android.content.Intent(
+                        android.content.Intent.ACTION_VIEW, android.net.Uri.parse(commit.htmlUrl)))
                 },
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
                 border = ButtonDefaults.outlinedButtonBorder.copy(
                     brush = androidx.compose.ui.graphics.SolidColor(c.border)),
             ) {
-                Icon(Icons.Default.OpenInBrowser, null, tint = c.textSecondary, modifier = Modifier.size(16.dp))
+                Icon(Icons.Default.OpenInBrowser, null,
+                    tint = c.textSecondary, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("在 GitHub 查看 / 回滚", fontSize = 14.sp, color = c.textSecondary)
+                Text("在 GitHub 查看", fontSize = 14.sp, color = c.textSecondary)
             }
         }
     }
@@ -575,3 +689,186 @@ private fun formatSize(bytes: Long): String = when {
 private fun formatDate(iso: String): String = try {
     iso.split("T").firstOrNull() ?: iso
 } catch (_: Exception) { iso }
+
+// ─── FileDiffSheet ──────────────────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun FileDiffSheet(filename: String, patch: String, c: GmColors, onDismiss: () -> Unit) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF0D1117),   // GitHub 暗色背景
+        dragHandle = { BottomSheetDefaults.DragHandle(color = Color(0xFF30363D)) },
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp)
+                .padding(bottom = 32.dp),
+        ) {
+            // 文件名 header
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(vertical = 10.dp),
+            ) {
+                Icon(Icons.Default.Description, null,
+                    tint = Color(0xFF8B949E), modifier = Modifier.size(16.dp))
+                Text(filename, fontSize = 13.sp, color = Color(0xFFE6EDF3),
+                    fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f), maxLines = 1)
+            }
+            HorizontalDivider(color = Color(0xFF30363D), thickness = 0.5.dp)
+            Spacer(Modifier.height(8.dp))
+
+            // Diff 内容（逐行着色）
+            val lines = patch.lines()
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .horizontalScroll(rememberScrollState()),
+            ) {
+                lines.forEach { line ->
+                    val (bg, fg) = when {
+                        line.startsWith("+") && !line.startsWith("+++") ->
+                            Color(0xFF0D4A29) to Color(0xFF85E89D)       // 新增：绿色
+                        line.startsWith("-") && !line.startsWith("---") ->
+                            Color(0xFF430D18) to Color(0xFFFFA198)       // 删除：红色
+                        line.startsWith("@@") ->
+                            Color(0xFF1B3A5E) to Color(0xFF79C0FF)       // 行号标记：蓝色
+                        else -> Color.Transparent to Color(0xFF8B949E)  // 上下文：灰色
+                    }
+                    Text(
+                        text = line,
+                        fontSize = 11.sp, color = fg, fontFamily = FontFamily.Monospace,
+                        lineHeight = 16.sp,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(bg)
+                            .padding(horizontal = 4.dp, vertical = 1.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ─── ResetCommitDialog ──────────────────────────────────────────────────────
+
+@Composable
+fun ResetCommitDialog(
+    sha: String, shortSha: String, c: GmColors,
+    onConfirm: (sha: String, mode: String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var selectedMode by remember { mutableStateOf("mixed") }
+
+    val modes = listOf(
+        Triple("soft",  "Soft Reset",  "保留暂存区和工作区的变更，仅移动 HEAD"),
+        Triple("mixed", "Mixed Reset", "清空暂存区，保留工作区变更（默认推荐）"),
+        Triple("hard",  "Hard Reset",  "⚠ 彻底丢弃所有未提交变更，不可恢复"),
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = c.bgCard,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(Icons.Default.Undo, null, tint = Yellow, modifier = Modifier.size(20.dp))
+                Text("回滚 / Reset", color = c.textPrimary, fontWeight = FontWeight.SemiBold)
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                // 目标提交
+                Row(
+                    modifier = Modifier.fillMaxWidth()
+                        .background(c.bgItem, RoundedCornerShape(8.dp))
+                        .padding(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("目标", fontSize = 12.sp, color = c.textTertiary)
+                    Text(shortSha, fontSize = 13.sp, color = Coral,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.background(CoralDim, RoundedCornerShape(4.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp))
+                }
+
+                // Reset 模式选择
+                modes.forEach { (mode, label, desc) ->
+                    val selected = selectedMode == mode
+                    val borderColor = if (selected) Coral else c.border
+                    val isHard = mode == "hard"
+                    Row(
+                        modifier = Modifier.fillMaxWidth()
+                            .background(
+                                if (selected) CoralDim else c.bgItem,
+                                RoundedCornerShape(10.dp),
+                            )
+                            .border(1.dp, borderColor, RoundedCornerShape(10.dp))
+                            .clickable { selectedMode = mode }
+                            .padding(10.dp),
+                        verticalAlignment = Alignment.Top,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        RadioButton(
+                            selected = selected,
+                            onClick = { selectedMode = mode },
+                            colors = RadioButtonDefaults.colors(selectedColor = Coral,
+                                unselectedColor = c.border),
+                            modifier = Modifier.size(20.dp).padding(top = 2.dp),
+                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically) {
+                                Text(label, fontSize = 13.sp, color = c.textPrimary,
+                                    fontWeight = FontWeight.Medium)
+                                if (isHard) {
+                                    Text("危险", fontSize = 10.sp, color = RedColor,
+                                        modifier = Modifier
+                                            .background(RedDim, RoundedCornerShape(4.dp))
+                                            .padding(horizontal = 4.dp, vertical = 1.dp))
+                                }
+                            }
+                            Text(desc, fontSize = 11.sp, color = c.textTertiary, lineHeight = 15.sp)
+                        }
+                    }
+                }
+
+                // Hard 模式警告
+                if (selectedMode == "hard") {
+                    Row(
+                        modifier = Modifier.fillMaxWidth()
+                            .background(RedDim, RoundedCornerShape(8.dp))
+                            .padding(10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Icon(Icons.Default.Warning, null,
+                            tint = RedColor, modifier = Modifier.size(16.dp))
+                        Text("Hard Reset 将永久丢失所有未提交的工作区变更，无法撤销。",
+                            fontSize = 11.sp, color = RedColor, lineHeight = 15.sp)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirm(sha, selectedMode) },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (selectedMode == "hard") RedColor else Coral),
+                shape = RoundedCornerShape(10.dp),
+            ) {
+                Text("执行 ${selectedMode.uppercase()} Reset",
+                    fontWeight = FontWeight.SemiBold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消", color = c.textSecondary)
+            }
+        },
+    )
+}

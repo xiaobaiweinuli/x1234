@@ -25,6 +25,7 @@ data class RepoDetailState(
     val issues: List<GHIssue> = emptyList(),
     val selectedCommit: GHCommitFull? = null,
     val commitDetailLoading: Boolean = false,
+    val selectedFilePatch: Pair<String,String>? = null,  // filename to patch
     val toast: String? = null,
 )
 
@@ -156,7 +157,12 @@ class RepoDetailViewModel(app: Application, savedStateHandle: SavedStateHandle) 
         }
     }
 
-    fun clearCommitDetail() = _state.update { it.copy(selectedCommit = null) }
+    fun clearCommitDetail() = _state.update { it.copy(selectedCommit = null, selectedFilePatch = null) }
+
+    fun openFilePatch(filename: String, patch: String) =
+        _state.update { it.copy(selectedFilePatch = filename to patch) }
+
+    fun closeFilePatch() = _state.update { it.copy(selectedFilePatch = null) }
     fun clearToast() = _state.update { it.copy(toast = null) }
 
     companion object {

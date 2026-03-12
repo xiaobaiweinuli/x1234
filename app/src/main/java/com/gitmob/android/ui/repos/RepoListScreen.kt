@@ -13,6 +13,9 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -55,9 +58,10 @@ fun RepoListScreen(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Box {
-                            // 头像 + 组织切换下拉
+                            // 头像：显示当前组织/用户的头像（追加 s=40 缩略图）
+                            val displayAvatar = thumbUrl(state.currentContext?.avatarUrl ?: state.userAvatar)
                             AsyncImage(
-                                model = state.userAvatar,
+                                model = displayAvatar,
                                 contentDescription = null,
                                 modifier = Modifier.size(30.dp).clip(CircleShape)
                                     .background(c.bgItem).clickable { showOrgMenu = true },
@@ -70,7 +74,7 @@ fun RepoListScreen(
                                 // 用户自己
                                 OrgMenuItem(
                                     login = state.userLogin,
-                                    avatarUrl = state.userAvatar,
+                                    avatarUrl = thumbUrl(state.userAvatar),
                                     selected = state.currentContext == null,
                                     onClick = { vm.switchContext(null); showOrgMenu = false },
                                     c = c,
@@ -192,7 +196,7 @@ private fun OrgMenuItem(login: String, avatarUrl: String?, selected: Boolean, on
     DropdownMenuItem(
         text = {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                AsyncImage(model = avatarUrl, contentDescription = null,
+                AsyncImage(model = thumbUrl(avatarUrl), contentDescription = null,
                     modifier = Modifier.size(22.dp).clip(CircleShape).background(c.bgItem))
                 Text(login, fontSize = 14.sp, color = if (selected) Coral else c.textPrimary)
                 if (selected) Spacer(Modifier.weight(1f))
@@ -294,6 +298,7 @@ private fun RepoCardContent(
     c: GmColors,
 ) {
     var showMenu by remember { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     Column(
         modifier = Modifier.fillMaxWidth().background(c.bgCard, RoundedCornerShape(14.dp))
@@ -329,6 +334,24 @@ private fun RepoCardContent(
                         text = { Text("克隆到本地", fontSize = 14.sp, color = c.textPrimary) },
                         leadingIcon = { Icon(Icons.Default.Download, null, tint = BlueColor, modifier = Modifier.size(16.dp)) },
                         onClick = { onClone(); showMenu = false },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("复制 SSH 地址", fontSize = 14.sp, color = c.textPrimary) },
+                        leadingIcon = { Icon(Icons.Default.ContentCopy, null, tint = c.textSecondary, modifier = Modifier.size(16.dp)) },
+                        onClick = {
+                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            cm.setPrimaryClip(ClipData.newPlainText("ssh_url", repo.sshUrl))
+                            showMenu = false
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("复制 HTTPS 地址", fontSize = 14.sp, color = c.textPrimary) },
+                        leadingIcon = { Icon(Icons.Default.Link, null, tint = c.textSecondary, modifier = Modifier.size(16.dp)) },
+                        onClick = {
+                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            cm.setPrimaryClip(ClipData.newPlainText("clone_url", repo.cloneUrl))
+                            showMenu = false
+                        },
                     )
                 }
             }
@@ -498,4 +521,10 @@ private fun GmTextField(
             focusedLabelColor = Coral, unfocusedLabelColor = c.textTertiary,
         ),
     )
+}
+
+/** 为 GitHub avatars URL 追加 s=40 缩略图参数 */
+private fun thumbUrl(url: String?): String? {
+    if (url.isNullOrBlank()) return url
+    return if (url.contains("?")) "$url&s=40" else "$url?s=40"
 }

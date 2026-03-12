@@ -48,7 +48,8 @@ class RepoListViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             tokenStorage.userProfile.collect { profile ->
                 if (profile != null) {
-                    _state.update { it.copy(userLogin = profile.first, userAvatar = profile.third) }
+                    _state.update { it.copy(userLogin = profile.first,
+                        userAvatar = thumbUrl(profile.third)) }
                     loadOrgs()
                 }
             }
@@ -127,4 +128,9 @@ class RepoListViewModel(app: Application) : AndroidViewModel(app) {
     fun clearToast() = _state.update { it.copy(toast = null) }
     fun setSearch(q: String) = _state.update { it.copy(searchQuery = q) }
     fun setFilter(private: Boolean?) = _state.update { it.copy(filterPrivate = private) }
+}
+
+private fun thumbUrl(url: String?): String? {
+    if (url.isNullOrBlank()) return url
+    return if (url.contains("?")) "$url&s=40" else "$url?s=40"
 }

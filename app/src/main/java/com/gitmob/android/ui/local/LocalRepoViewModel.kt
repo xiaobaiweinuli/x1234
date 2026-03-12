@@ -70,6 +70,7 @@ class LocalRepoViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 从文件选择器导入目录 */
     fun importDirectory(path: String) = viewModelScope.launch {
+        try {
         val dir = File(path)
         if (!dir.exists() || !dir.isDirectory) {
             toast("路径无效：$path"); return@launch
@@ -86,10 +87,12 @@ class LocalRepoViewModel(app: Application) : AndroidViewModel(app) {
         storage.addOrUpdate(repo)
         toast("已导入：${dir.name}")
         _state.update { it.copy(showFilePicker = false) }
+        } catch (e: Exception) { toast("导入失败：${e.message}") }
     }
 
     /** 新建本地项目（创建目录 + git init） */
     fun createLocalProject(path: String, name: String) = viewModelScope.launch {
+        try {
         val dir = File(path, name)
         dir.mkdirs()
         val result = GitRunner.init(dir.absolutePath)
@@ -101,6 +104,7 @@ class LocalRepoViewModel(app: Application) : AndroidViewModel(app) {
         )
         storage.addOrUpdate(repo)
         toast(if (result.success) "已创建：$name" else "初始化失败：${result.error}")
+        } catch (e: Exception) { toast("创建失败：${e.message}") }
     }
 
     /** 一键上云：init → add → commit → push */
@@ -235,6 +239,28 @@ class LocalRepoViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(showClonePicker = true, pendingCloneUrl = repoUrl) }
     }
     fun hideClonePicker() = _state.update { it.copy(showClonePicker = false, pendingCloneUrl = "") }
+
+    /** git reset --soft/mixed/hard <sha> */
+    fun gitReset(repoId: String, sha: String, mode: String = "mixed") = viewModelScope.launch {
+        val repo = _state.value.repos.find { it.id == repoId } ?: return@launch
+        try {
+            val flag = "--$mode"
+            val result = GitRunner.run(repo.path, "reset", flag, sha)
+            if (result.success) {
+                // 刷新状态
+                val branch = GitRunner.currentBranch(repo.path)
+                val last   = GitRunner.lastCommitMsg(repo.path)
+                val updated = repo.copy(currentBranch = branch, lastCommit = last,
+                    status = LocalRepoStatus.GIT_INITIALIZED)
+                storage.addOrUpdate(updated)
+                toast("✓ reset $mode 到 ${sha.take(7)}")
+            } else {
+                toast("reset 失败：${result.error.take(100)}")
+            }
+        } catch (e: Exception) {
+            toast("reset 异常：${e.message}")
+        }
+    }
     fun dismissWizard() { _wizardStep.value = PushWizardStep.None }
     fun clearToast() = _state.update { it.copy(toast = null) }
 
