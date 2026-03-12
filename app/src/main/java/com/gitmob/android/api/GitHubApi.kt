@@ -170,4 +170,62 @@ interface GitHubApi {
         @Path("owner") owner: String,
         @Path("repo") repo: String,
     ): Response<Unit>
+    // ── Orgs ──
+    @GET("user/orgs")
+    suspend fun getUserOrgs(@Query("per_page") perPage: Int = 50): List<GHOrg>
+
+    @GET("orgs/{org}/repos")
+    suspend fun getOrgRepos(
+        @Path("org") org: String,
+        @Query("sort") sort: String = "updated",
+        @Query("per_page") perPage: Int = 50,
+    ): List<GHRepo>
+
+    // ── Repo PATCH (rename / edit) ──
+    @PATCH("repos/{owner}/{repo}")
+    suspend fun updateRepo(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Body body: GHUpdateRepoRequest,
+    ): GHRepo
+
+    // ── Topics ──
+    @Headers("Accept: application/vnd.github.mercy-preview+json")
+    @GET("repos/{owner}/{repo}/topics")
+    suspend fun getTopics(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+    ): GHTopics
+
+    @Headers("Accept: application/vnd.github.mercy-preview+json")
+    @PUT("repos/{owner}/{repo}/topics")
+    suspend fun replaceTopics(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Body body: GHTopics,
+    ): GHTopics
+
+    // ── Branch rename ──
+    @POST("repos/{owner}/{repo}/branches/{branch}/rename")
+    suspend fun renameBranch(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("branch") branch: String,
+        @Body body: GHRenameBranchRequest,
+    ): GHBranch
+
+    // ── Commit detail ──
+    @GET("repos/{owner}/{repo}/commits/{sha}")
+    suspend fun getCommit(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("sha") sha: String,
+    ): GHCommitFull
+
+    // ── Check name availability ──
+    @GET("repos/{owner}/{repo}")
+    suspend fun checkRepoExists(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+    ): retrofit2.Response<GHRepo>
 }

@@ -26,9 +26,7 @@ import com.gitmob.android.ui.repo.RepoDetailScreen
 import com.gitmob.android.ui.repo.RepoDetailViewModel
 import com.gitmob.android.ui.repos.RepoListScreen
 import com.gitmob.android.ui.settings.SettingsScreen
-import com.gitmob.android.ui.theme.BgDeep
-import com.gitmob.android.ui.theme.TextPrimary
-import com.gitmob.android.ui.theme.TextSecondary
+import com.gitmob.android.ui.theme.LocalGmColors
 import kotlinx.coroutines.flow.first
 import java.net.URLDecoder
 import java.net.URLEncoder

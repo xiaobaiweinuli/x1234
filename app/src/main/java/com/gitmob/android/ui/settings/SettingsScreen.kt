@@ -18,6 +18,8 @@ import androidx.compose.ui.unit.sp
 import com.gitmob.android.auth.ThemeMode
 import com.gitmob.android.auth.TokenStorage
 import com.gitmob.android.ui.theme.*
+import com.gitmob.android.ui.theme.LocalGmColors
+import com.gitmob.android.ui.theme.GmColors
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -28,21 +30,22 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onLogout: () -> Unit,
 ) {
+    val c = LocalGmColors.current
     val profile by tokenStorage.userProfile.collectAsState(initial = null)
 
     Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
+        containerColor = c.bgDeep,
         topBar = {
             TopAppBar(
                 title = { Text("设置", fontWeight = FontWeight.SemiBold, fontSize = 17.sp) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            tint = c.textPrimaryVariant)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
+                    containerColor = c.bgDeep,
                 ),
             )
         },
@@ -69,15 +72,14 @@ fun SettingsScreen(
                             modifier = Modifier
                                 .size(42.dp)
                                 .background(
-                                    MaterialTheme.colorScheme.surfaceVariant,
+                                    c.bgCardVariant,
                                     RoundedCornerShape(50),
                                 ),
                         )
                         Column {
                             Text(profile!!.second, fontWeight = FontWeight.SemiBold,
-                                fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurface)
-                            Text("@${profile!!.first}", fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                fontSize = 15.sp, color = c.textPrimary)
+                            Text("@${profile!!.first}", fontSize = 12.sp, color = c.textSecondary)
                         }
                     }
                 }
@@ -100,7 +102,7 @@ fun SettingsScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(label, fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurface)
+                        Text(label, fontSize = 15.sp, color = c.textPrimary)
                         if (currentTheme == mode) {
                             Icon(Icons.Default.Check, null,
                                 tint = Coral, modifier = Modifier.size(18.dp))
@@ -109,7 +111,7 @@ fun SettingsScreen(
                     if (i < options.lastIndex) {
                         HorizontalDivider(
                             modifier = Modifier.padding(horizontal = 16.dp),
-                            color = MaterialTheme.colorScheme.outline,
+                            color = c.border,
                             thickness = 0.5.dp,
                         )
                     }
@@ -135,7 +137,7 @@ fun SettingsScreen(
             Text(
                 "GitMob · github.com/xiaobaiweinuli/GitMob-Android",
                 fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = c.textPrimaryVariant,
                 modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 8.dp),
             )
         }
@@ -148,7 +150,7 @@ private fun SectionLabel(text: String) {
         text = text.uppercase(),
         fontSize = 11.sp,
         fontWeight = FontWeight.SemiBold,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        color = c.textPrimaryVariant,
         letterSpacing = 0.8.sp,
         modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
     )
@@ -159,7 +161,7 @@ private fun SettingCard(content: @Composable ColumnScope.() -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(14.dp)),
+            .background(c.bgCard, RoundedCornerShape(14.dp)),
         content = content,
     )
 }

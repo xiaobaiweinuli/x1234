@@ -56,6 +56,7 @@ fun CreateRepoScreen(
     onCreated: (String, String) -> Unit, // owner, repo
     vm: CreateRepoViewModel = viewModel(),
 ) {
+    val c = LocalGmColors.current
     var name by remember { mutableStateOf("") }
     var desc by remember { mutableStateOf("") }
     var private by remember { mutableStateOf(false) }
@@ -73,16 +74,16 @@ fun CreateRepoScreen(
     }
 
     Scaffold(
-        containerColor = BgDeep,
+        containerColor = c.bgDeep,
         topBar = {
             TopAppBar(
-                title = { Text("新建仓库", fontWeight = FontWeight.SemiBold, color = TextPrimary) },
+                title = { Text("新建仓库", fontWeight = FontWeight.SemiBold, color = c.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = TextSecondary)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = c.textSecondary)
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = BgDeep),
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = c.bgDeep),
             )
         },
     ) { padding ->
@@ -127,18 +128,18 @@ fun CreateRepoScreen(
 @Composable
 private fun FormField(label: String, value: String, onValueChange: (String) -> Unit, placeholder: String, singleLine: Boolean) {
     Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-        Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = TextSecondary)
+        Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = c.textSecondary)
         OutlinedTextField(
             value = value, onValueChange = onValueChange,
-            placeholder = { Text(placeholder, color = TextTertiary, fontSize = 14.sp) },
+            placeholder = { Text(placeholder, color = c.textTertiary, fontSize = 14.sp) },
             singleLine = singleLine,
             minLines = if (singleLine) 1 else 3,
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(12.dp),
             colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = Coral, unfocusedBorderColor = Border,
-                focusedContainerColor = BgCard, unfocusedContainerColor = BgCard,
-                focusedTextColor = TextPrimary, unfocusedTextColor = TextPrimary,
+                focusedc.borderColor = Coral, unfocusedc.borderColor = c.border,
+                focusedContainerColor = c.bgCard, unfocusedContainerColor = c.bgCard,
+                focusedTextColor = c.textPrimary, unfocusedTextColor = c.textPrimary,
             ),
         )
     }
@@ -147,18 +148,18 @@ private fun FormField(label: String, value: String, onValueChange: (String) -> U
 @Composable
 private fun ToggleCard(label: String, sub: String, checked: Boolean, onToggle: (Boolean) -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().background(BgCard, RoundedCornerShape(12.dp)).padding(14.dp),
+        modifier = Modifier.fillMaxWidth().background(c.bgCard, RoundedCornerShape(12.dp)).padding(14.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Column {
-            Text(label, fontSize = 14.sp, color = TextPrimary)
-            Text(sub, fontSize = 11.sp, color = TextTertiary, modifier = Modifier.padding(top = 2.dp))
+            Text(label, fontSize = 14.sp, color = c.textPrimary)
+            Text(sub, fontSize = 11.sp, color = c.textTertiary, modifier = Modifier.padding(top = 2.dp))
         }
         Switch(
             checked = checked, onCheckedChange = onToggle,
             colors = SwitchDefaults.colors(
                 checkedThumbColor = Color.White, checkedTrackColor = Coral,
-                uncheckedThumbColor = TextTertiary, uncheckedTrackColor = BgItem,
+                uncheckedThumbColor = c.textTertiary, uncheckedTrackColor = c.bgItem,
             ),
         )
     }

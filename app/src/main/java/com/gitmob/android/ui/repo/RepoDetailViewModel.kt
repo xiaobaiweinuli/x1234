@@ -20,15 +20,15 @@ data class RepoDetailState(
     val loading: Boolean = false,
     val contentsLoading: Boolean = false,
     val error: String? = null,
-    val tab: Int = 0, // 0=Files 1=Commits 2=Branches 3=PRs 4=Issues
+    val tab: Int = 0,
     val prs: List<GHPullRequest> = emptyList(),
     val issues: List<GHIssue> = emptyList(),
+    val selectedCommit: GHCommitFull? = null,
+    val commitDetailLoading: Boolean = false,
+    val toast: String? = null,
 )
 
-class RepoDetailViewModel(
-    app: Application,
-    savedStateHandle: SavedStateHandle,
-) : AndroidViewModel(app) {
+class RepoDetailViewModel(app: Application, savedStateHandle: SavedStateHandle) : AndroidViewModel(app) {
 
     val owner: String = savedStateHandle["owner"] ?: ""
     val repoName: String = savedStateHandle["repo"] ?: ""
@@ -39,51 +39,53 @@ class RepoDetailViewModel(
 
     init { loadAll() }
 
-    fun loadAll() {
-        viewModelScope.launch {
-            _state.update { it.copy(loading = true, error = null) }
-            try {
-                val r = repository.getRepo(owner, repoName)
-                val branches = repository.getBranches(owner, repoName)
-                val starred = repository.isStarred(owner, repoName)
-                _state.update {
-                    it.copy(
-                        repo = r,
-                        branches = branches,
-                        currentBranch = r.defaultBranch,
-                        isStarred = starred,
-                        loading = false,
-                    )
-                }
-                loadContents("", r.defaultBranch)
-                loadCommits(r.defaultBranch)
-            } catch (e: Exception) {
-                _state.update { it.copy(loading = false, error = e.message ?: "加载失败") }
-            }
+    fun loadAll() = viewModelScope.launch {
+        _state.update { it.copy(loading = true, error = null) }
+        try {
+            val r = repository.getRepo(owner, repoName)
+            val branches = repository.getBranches(owner, repoName)
+            val starred = repository.isStarred(owner, repoName)
+            _state.update { it.copy(repo = r, branches = branches, currentBranch = r.defaultBranch, isStarred = starred, loading = false) }
+            loadContents("", r.defaultBranch)
+            loadCommits(r.defaultBranch)
+            loadPRsAndIssues()
+        } catch (e: Exception) {
+            _state.update { it.copy(loading = false, error = e.message ?: "加载失败") }
         }
     }
 
-    fun loadContents(path: String, ref: String? = null) {
-        viewModelScope.launch {
-            _state.update { it.copy(contentsLoading = true) }
-            try {
-                val branch = ref ?: _state.value.currentBranch
-                val contents = repository.getContents(owner, repoName, path, branch)
-                    .sortedWith(compareBy({ it.type != "dir" }, { it.name }))
-                _state.update { it.copy(contents = contents, currentPath = path, contentsLoading = false) }
-            } catch (e: Exception) {
-                _state.update { it.copy(contentsLoading = false) }
-            }
+    fun loadContents(path: String, ref: String? = null) = viewModelScope.launch {
+        _state.update { it.copy(contentsLoading = true) }
+        try {
+            val branch = ref ?: _state.value.currentBranch
+            val contents = repository.getContents(owner, repoName, path, branch)
+                .sortedWith(compareBy({ it.type != "dir" }, { it.name }))
+            _state.update { it.copy(contents = contents, currentPath = path, contentsLoading = false) }
+        } catch (e: Exception) {
+            _state.update { it.copy(contentsLoading = false) }
         }
     }
 
-    fun loadCommits(sha: String? = null) {
-        viewModelScope.launch {
-            try {
-                val commits = repository.getCommits(owner, repoName, sha ?: _state.value.currentBranch, 1)
-                _state.update { it.copy(commits = commits) }
-            } catch (_: Exception) {}
-        }
+    fun navigateUp() {
+        val path = _state.value.currentPath
+        val parent = if (path.contains("/")) path.substringBeforeLast("/") else ""
+        loadContents(parent)
+    }
+
+    fun loadCommits(sha: String? = null) = viewModelScope.launch {
+        try {
+            val ref = sha ?: _state.value.currentBranch
+            val commits = repository.getCommits(owner, repoName, ref)
+            _state.update { it.copy(commits = commits) }
+        } catch (_: Exception) {}
+    }
+
+    private fun loadPRsAndIssues() = viewModelScope.launch {
+        try {
+            val prs = repository.getPRs(owner, repoName)
+            val issues = repository.getIssues(owner, repoName)
+            _state.update { it.copy(prs = prs, issues = issues) }
+        } catch (_: Exception) {}
     }
 
     fun switchBranch(branch: String) {
@@ -92,74 +94,80 @@ class RepoDetailViewModel(
         loadCommits(branch)
     }
 
-    fun navigateUp() {
-        val path = _state.value.currentPath
-        val parent = path.substringBeforeLast("/", "")
-        loadContents(parent)
+    fun setTab(t: Int) = _state.update { it.copy(tab = t) }
+
+    fun toggleStar() = viewModelScope.launch {
+        try {
+            if (_state.value.isStarred) repository.unstarRepo(owner, repoName)
+            else repository.starRepo(owner, repoName)
+            _state.update { it.copy(isStarred = !it.isStarred) }
+        } catch (_: Exception) {}
     }
 
-    fun setTab(index: Int) {
-        _state.update { it.copy(tab = index) }
-        if (index == 3 && _state.value.prs.isEmpty()) loadPRs()
-        if (index == 4 && _state.value.issues.isEmpty()) loadIssues()
-    }
-
-    fun toggleStar() {
-        viewModelScope.launch {
-            val isStarred = _state.value.isStarred
-            try {
-                if (isStarred) repository.unstarRepo(owner, repoName)
-                else repository.starRepo(owner, repoName)
-                _state.update { it.copy(isStarred = !isStarred) }
-            } catch (_: Exception) {}
+    fun createBranch(name: String) = viewModelScope.launch {
+        try {
+            val sha = _state.value.branches.find { it.name == _state.value.currentBranch }?.commit?.sha ?: return@launch
+            repository.createBranch(owner, repoName, name, sha)
+            val branches = repository.getBranches(owner, repoName)
+            _state.update { it.copy(branches = branches, toast = "已创建分支 $name") }
+        } catch (e: Exception) {
+            _state.update { it.copy(toast = "创建失败：${e.message}") }
         }
     }
 
-    fun createBranch(name: String) {
-        viewModelScope.launch {
-            try {
-                val sha = _state.value.branches
-                    .firstOrNull { it.name == _state.value.currentBranch }
-                    ?.commit?.sha ?: return@launch
-                repository.createBranch(owner, repoName, name, sha)
-                val branches = repository.getBranches(owner, repoName)
-                _state.update { it.copy(branches = branches) }
-            } catch (_: Exception) {}
+    fun deleteBranch(branch: String) = viewModelScope.launch {
+        try {
+            repository.deleteBranch(owner, repoName, branch)
+            val branches = repository.getBranches(owner, repoName)
+            _state.update { it.copy(branches = branches, toast = "已删除分支 $branch") }
+        } catch (e: Exception) {
+            _state.update { it.copy(toast = "删除失败：${e.message}") }
         }
     }
 
-    private fun loadPRs() {
-        viewModelScope.launch {
-            try {
-                val prs = repository.getPullRequests(owner, repoName)
-                _state.update { it.copy(prs = prs) }
-            } catch (_: Exception) {}
+    fun renameBranch(oldName: String, newName: String) = viewModelScope.launch {
+        try {
+            repository.renameBranch(owner, repoName, oldName, newName)
+            val branches = repository.getBranches(owner, repoName)
+            val currentBranch = if (_state.value.currentBranch == oldName) newName else _state.value.currentBranch
+            _state.update { it.copy(branches = branches, currentBranch = currentBranch, toast = "已重命名为 $newName") }
+        } catch (e: Exception) {
+            _state.update { it.copy(toast = "重命名失败：${e.message}") }
         }
     }
 
-    private fun loadIssues() {
-        viewModelScope.launch {
-            try {
-                val issues = repository.getIssues(owner, repoName)
-                _state.update { it.copy(issues = issues) }
-            } catch (_: Exception) {}
+    fun setDefaultBranch(branch: String) = viewModelScope.launch {
+        try {
+            repository.updateRepo(owner, repoName, com.gitmob.android.api.GHUpdateRepoRequest(defaultBranch = branch))
+            val updated = repository.getRepo(owner, repoName)
+            _state.update { it.copy(repo = updated, toast = "默认分支已设为 $branch") }
+        } catch (e: Exception) {
+            _state.update { it.copy(toast = "设置失败：${e.message}") }
         }
     }
+
+    fun loadCommitDetail(sha: String) = viewModelScope.launch {
+        _state.update { it.copy(commitDetailLoading = true) }
+        try {
+            val detail = repository.getCommitDetail(owner, repoName, sha)
+            _state.update { it.copy(selectedCommit = detail, commitDetailLoading = false) }
+        } catch (e: Exception) {
+            _state.update { it.copy(commitDetailLoading = false, toast = "加载详情失败") }
+        }
+    }
+
+    fun clearCommitDetail() = _state.update { it.copy(selectedCommit = null) }
+    fun clearToast() = _state.update { it.copy(toast = null) }
 
     companion object {
         fun factory(owner: String, repo: String): androidx.lifecycle.ViewModelProvider.Factory =
             object : androidx.lifecycle.ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : androidx.lifecycle.ViewModel> create(
-                    modelClass: Class<T>,
-                    extras: androidx.lifecycle.viewmodel.CreationExtras,
+                    modelClass: Class<T>, extras: androidx.lifecycle.viewmodel.CreationExtras,
                 ): T {
-                    val app = checkNotNull(
-                        extras[androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY]
-                    )
-                    val handle = androidx.lifecycle.SavedStateHandle(
-                        mapOf("owner" to owner, "repo" to repo)
-                    )
+                    val app = checkNotNull(extras[androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY])
+                    val handle = androidx.lifecycle.SavedStateHandle(mapOf("owner" to owner, "repo" to repo))
                     return RepoDetailViewModel(app, handle) as T
                 }
             }

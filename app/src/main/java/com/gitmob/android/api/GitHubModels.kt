@@ -176,3 +176,63 @@ data class GHSearchResult<T>(
     @SerializedName("total_count") val totalCount: Int,
     val items: List<T>,
 )
+
+// ── Org ──
+data class GHOrg(
+    val login: String,
+    @SerializedName("avatar_url") val avatarUrl: String?,
+    val description: String?,
+)
+
+// ── Repo update ──
+data class GHUpdateRepoRequest(
+    val name: String? = null,
+    val description: String? = null,
+    val homepage: String? = null,
+    @SerializedName("private") val private: Boolean? = null,
+    @SerializedName("default_branch") val defaultBranch: String? = null,
+)
+
+// ── Topics ──
+data class GHTopics(
+    val names: List<String>,
+)
+
+// ── Branch rename ──
+data class GHRenameBranchRequest(
+    @SerializedName("new_name") val newName: String,
+)
+
+// ── Commit detail (files) ──
+data class GHCommitFull(
+    val sha: String,
+    val commit: GHCommitDetail,
+    val author: GHOwner?,
+    @SerializedName("html_url") val htmlUrl: String,
+    val stats: GHCommitStats?,
+    val files: List<GHCommitFile>?,
+) {
+    val shortSha get() = sha.take(7)
+}
+
+data class GHCommitStats(
+    val additions: Int,
+    val deletions: Int,
+    val total: Int,
+)
+
+data class GHCommitFile(
+    val filename: String,
+    val status: String,    // added | removed | modified | renamed
+    val additions: Int,
+    val deletions: Int,
+    val changes: Int,
+    val patch: String?,
+)
+
+// ── Revert / Merge request ──
+data class GHMergeRequest(
+    val base: String,
+    val head: String,
+    @SerializedName("commit_message") val commitMessage: String,
+)
