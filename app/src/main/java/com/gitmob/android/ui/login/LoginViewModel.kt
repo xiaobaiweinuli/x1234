@@ -21,6 +21,10 @@ class LoginViewModel(app: Application) : AndroidViewModel(app) {
     private val _state = MutableStateFlow<LoginUiState>(Idle)
     val state = _state.asStateFlow()
 
+    fun onOAuthError(msg: String) {
+        _state.value = Error("授权失败：$msg")
+    }
+
     fun onTokenReceived(token: String) {
         viewModelScope.launch {
             _state.value = Loading
