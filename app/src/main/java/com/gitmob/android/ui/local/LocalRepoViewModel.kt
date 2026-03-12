@@ -4,6 +4,8 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.gitmob.android.auth.TokenStorage
+import com.gitmob.android.ui.filepicker.BookmarkPath
+import com.google.gson.reflect.TypeToken
 import com.gitmob.android.local.GitRunner
 import com.gitmob.android.local.LocalRepo
 import com.gitmob.android.local.LocalRepoStatus
@@ -11,6 +13,9 @@ import com.gitmob.android.local.LocalRepoStorage
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.io.File
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.SharingStarted
 
 data class LocalRepoListState(
     val repos: List<LocalRepo> = emptyList(),
@@ -31,6 +36,7 @@ sealed class PushWizardStep {
 
 class LocalRepoViewModel(app: Application) : AndroidViewModel(app) {
     private val storage = LocalRepoStorage(app)
+    private val gson = com.google.gson.Gson()
     private val tokenStorage = TokenStorage(app)
     private val _state = MutableStateFlow(LocalRepoListState())
     val state = _state.asStateFlow()
@@ -39,6 +45,15 @@ class LocalRepoViewModel(app: Application) : AndroidViewModel(app) {
     val wizardStep = _wizardStep.asStateFlow()
 
     private var token: String = ""
+
+    // 自定义书签（持久化在 DataStore）
+    val customBookmarks: kotlinx.coroutines.flow.StateFlow<List<BookmarkPath>> =
+        tokenStorage.bookmarksJson.map { json ->
+            try {
+                val type = object : TypeToken<List<BookmarkPath>>() {}.type
+                gson.fromJson<List<BookmarkPath>>(json, type) ?: emptyList()
+            } catch (_: Exception) { emptyList() }
+        }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, emptyList())
 
     init {
         viewModelScope.launch {
@@ -222,5 +237,18 @@ class LocalRepoViewModel(app: Application) : AndroidViewModel(app) {
     fun hideClonePicker() = _state.update { it.copy(showClonePicker = false, pendingCloneUrl = "") }
     fun dismissWizard() { _wizardStep.value = PushWizardStep.None }
     fun clearToast() = _state.update { it.copy(toast = null) }
+
+    fun addBookmark(bm: BookmarkPath) = viewModelScope.launch {
+        val current = customBookmarks.value.toMutableList()
+        if (current.none { it.path == bm.path }) {
+            current.add(bm)
+            tokenStorage.saveBookmarksJson(gson.toJson(current))
+        }
+    }
+
+    fun removeBookmark(bm: BookmarkPath) = viewModelScope.launch {
+        val updated = customBookmarks.value.filter { it.path != bm.path }
+        tokenStorage.saveBookmarksJson(gson.toJson(updated))
+    }
     private fun toast(msg: String) = _state.update { it.copy(toast = msg) }
 }

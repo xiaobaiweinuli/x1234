@@ -1,6 +1,8 @@
 package com.gitmob.android.ui.local
 
 import androidx.compose.animation.animateColorAsState
+import com.gitmob.android.ui.filepicker.BookmarkPath
+import androidx.compose.runtime.collectAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -18,7 +20,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.gitmob.android.local.LocalRepo
 import com.gitmob.android.local.LocalRepoStatus
 import com.gitmob.android.ui.common.*
@@ -30,11 +31,12 @@ import com.gitmob.android.ui.theme.*
 @Composable
 fun LocalRepoListScreen(
     rootEnabled: Boolean,
-    vm: LocalRepoViewModel = viewModel(),
+    vm: LocalRepoViewModel,
 ) {
     val c = LocalGmColors.current
     val state by vm.state.collectAsState()
     val wizardStep by vm.wizardStep.collectAsState()
+    val customBookmarks by vm.customBookmarks.collectAsState()
     var newProjectDialog by remember { mutableStateOf(false) }
     var newProjectName by remember { mutableStateOf("") }
     var showNewProjectPicker by remember { mutableStateOf(false) }
@@ -51,6 +53,9 @@ fun LocalRepoListScreen(
             title = "导入本地目录",
             mode = PickerMode.DIRECTORY,
             rootEnabled = rootEnabled,
+            customBookmarks = customBookmarks,
+            onAddBookmark    = { bm -> vm.addBookmark(bm) },
+            onRemoveBookmark = { bm -> vm.removeBookmark(bm) },
             onConfirm = { path, _ -> vm.importDirectory(path) },
             onDismiss = vm::hideFilePicker,
         )
@@ -63,6 +68,9 @@ fun LocalRepoListScreen(
             title = "选择克隆目标目录",
             mode = PickerMode.DIRECTORY,
             rootEnabled = rootEnabled,
+            customBookmarks = customBookmarks,
+            onAddBookmark    = { bm -> vm.addBookmark(bm) },
+            onRemoveBookmark = { bm -> vm.removeBookmark(bm) },
             onConfirm = { path, _ -> vm.cloneRepo(state.pendingCloneUrl, path) },
             onDismiss = vm::hideClonePicker,
         )
@@ -75,6 +83,9 @@ fun LocalRepoListScreen(
             title = "选择项目父目录",
             mode = PickerMode.DIRECTORY,
             rootEnabled = rootEnabled,
+            customBookmarks = customBookmarks,
+            onAddBookmark    = { bm -> vm.addBookmark(bm) },
+            onRemoveBookmark = { bm -> vm.removeBookmark(bm) },
             onConfirm = { path, _ ->
                 newProjectParentDir = path
                 showNewProjectPicker = false

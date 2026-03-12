@@ -23,22 +23,23 @@ import com.gitmob.android.ui.common.ErrorBox
 import com.gitmob.android.ui.common.LoadingBox
 import com.gitmob.android.ui.create.CreateRepoScreen
 import com.gitmob.android.ui.local.LocalRepoListScreen
+import com.gitmob.android.ui.local.LocalRepoViewModel
 import com.gitmob.android.ui.login.LoginScreen
 import com.gitmob.android.ui.repo.RepoDetailScreen
 import com.gitmob.android.ui.repo.RepoDetailViewModel
 import com.gitmob.android.ui.repos.RepoListScreen
 import com.gitmob.android.ui.settings.SettingsScreen
-import com.gitmob.android.ui.theme.LocalGmColors
 import com.gitmob.android.ui.theme.Coral
 import com.gitmob.android.ui.theme.CoralDim
-import kotlinx.coroutines.launch
+import com.gitmob.android.ui.theme.LocalGmColors
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import java.net.URLDecoder
 import java.net.URLEncoder
 
 sealed class Route(val path: String) {
     object Login      : Route("login")
-    object Main       : Route("main")    // 含底部导航的宿主
+    object Main       : Route("main")
     object CreateRepo : Route("create_repo")
     object Settings   : Route("settings")
     object RepoDetail : Route("repo/{owner}/{repo}") {
@@ -50,7 +51,6 @@ sealed class Route(val path: String) {
     }
 }
 
-/** 底部导航 Tab 定义 */
 sealed class BottomTab(val route: String, val label: String, val icon: ImageVector) {
     object Remote : BottomTab("tab_remote", "远程", Icons.Default.Cloud)
     object Local  : BottomTab("tab_local",  "本地", Icons.Default.Folder)
@@ -86,35 +86,39 @@ fun AppNavGraph(
             )
         }
 
-        // ── 主界面（含底部导航）────────────────────────────────
         composable(Route.Main.path) {
+            // ViewModel 在这里创建，作用域是 Route.Main 的 BackStackEntry
+            // 两个 Tab 都接收同一实例，克隆操作因此生效
+            val localVm: LocalRepoViewModel = viewModel()
             MainScreen(
-                tokenStorage = tokenStorage,
-                currentTheme = currentTheme,
-                rootEnabled = rootEnabled,
-                onThemeChange = onThemeChange,
+                tokenStorage         = tokenStorage,
+                currentTheme         = currentTheme,
+                rootEnabled          = rootEnabled,
+                onThemeChange        = onThemeChange,
                 onNavigateToSettings = { navController.navigate(Route.Settings.path) },
-                onRepoClick = { owner, repo -> navController.navigate(Route.RepoDetail.go(owner, repo)) },
+                onRepoClick          = { owner, repo ->
+                    navController.navigate(Route.RepoDetail.go(owner, repo))
+                },
                 onCreateRepo = { navController.navigate(Route.CreateRepo.path) },
+                localVm      = localVm,
             )
         }
 
         composable(Route.Settings.path) {
             val scope = rememberCoroutineScope()
+            val rootEnabled2 by tokenStorage.rootEnabled.collectAsState(initial = false)
             SettingsScreen(
                 tokenStorage  = tokenStorage,
                 currentTheme  = currentTheme,
-                rootEnabled   = rootEnabled,
+                rootEnabled   = rootEnabled2,
                 onThemeChange = onThemeChange,
                 onRootToggle  = { enabled ->
                     scope.launch { tokenStorage.setRootEnabled(enabled) }
                 },
-                onBack  = { navController.popBackStack() },
+                onBack   = { navController.popBackStack() },
                 onLogout = {
                     scope.launch { tokenStorage.clear() }
-                    navController.navigate(Route.Login.path) {
-                        popUpTo(0) { inclusive = true }
-                    }
+                    navController.navigate(Route.Login.path) { popUpTo(0) { inclusive = true } }
                 },
             )
         }
@@ -168,6 +172,8 @@ fun AppNavGraph(
     }
 }
 
+// ─── MainScreen：不用嵌套 Scaffold，改用 Column+Box 避免双层 padding ──────────
+
 @Composable
 private fun MainScreen(
     tokenStorage: TokenStorage,
@@ -177,6 +183,7 @@ private fun MainScreen(
     onNavigateToSettings: () -> Unit,
     onRepoClick: (String, String) -> Unit,
     onCreateRepo: () -> Unit,
+    localVm: LocalRepoViewModel,
 ) {
     val c = LocalGmColors.current
     val tabs = listOf(BottomTab.Remote, BottomTab.Local)
@@ -184,54 +191,57 @@ private fun MainScreen(
     val navBackStack by tabNavController.currentBackStackEntryAsState()
     val currentRoute = navBackStack?.destination?.route
 
-    Scaffold(
-        containerColor = c.bgDeep,
-        bottomBar = {
-            NavigationBar(
-                containerColor = c.bgCard,
-                tonalElevation = 0.dp,
+    // 用 Column 替代 Scaffold：避免嵌套 Scaffold 造成 bottomBar insets 重复
+    Column(modifier = Modifier.fillMaxSize()) {
+
+        // 上部内容区域（Tab 页面各自有自己的 Scaffold + TopAppBar）
+        Box(modifier = Modifier.weight(1f)) {
+            NavHost(
+                navController = tabNavController,
+                startDestination = BottomTab.Remote.route,
             ) {
-                tabs.forEach { tab ->
-                    NavigationBarItem(
-                        selected = currentRoute == tab.route,
-                        onClick = {
-                            tabNavController.navigate(tab.route) {
-                                popUpTo(tabNavController.graph.startDestinationId) { saveState = true }
-                                launchSingleTop = true
-                                restoreState = true
-                            }
-                        },
-                        icon = { Icon(tab.icon, null) },
-                        label = { Text(tab.label, fontSize = 11.sp) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = Coral,
-                            selectedTextColor = Coral,
-                            unselectedIconColor = c.textTertiary,
-                            unselectedTextColor = c.textTertiary,
-                            indicatorColor = CoralDim,
-                        ),
+                composable(BottomTab.Remote.route) {
+                    RepoListScreen(
+                        onRepoClick    = onRepoClick,
+                        onCreateRepo   = onCreateRepo,
+                        onProfileClick = onNavigateToSettings,
+                        // 克隆操作指向共享的 localVm，切换到本地 Tab 即可看到
+                        onCloneRepo    = { url -> localVm.startClone(url) },
                     )
                 }
+                composable(BottomTab.Local.route) {
+                    // 传入共享 VM 实例，而非让屏幕内部自己创建
+                    LocalRepoListScreen(rootEnabled = rootEnabled, vm = localVm)
+                }
             }
-        },
-    ) { innerPadding ->
-        NavHost(
-            navController = tabNavController,
-            startDestination = BottomTab.Remote.route,
-            modifier = Modifier.padding(innerPadding),
+        }
+
+        // 底部导航栏（固定在 Column 底部，不参与 Scaffold inset 计算）
+        NavigationBar(
+            containerColor = c.bgCard,
+            tonalElevation = 0.dp,
+            modifier = Modifier.navigationBarsPadding(),
         ) {
-            composable(BottomTab.Remote.route) {
-                // 共享同一个 LocalRepoViewModel 用于触发克隆
-                val localVm: com.gitmob.android.ui.local.LocalRepoViewModel = viewModel()
-                RepoListScreen(
-                    onRepoClick    = onRepoClick,
-                    onCreateRepo   = onCreateRepo,
-                    onProfileClick = onNavigateToSettings,
-                    onCloneRepo    = { url -> localVm.startClone(url) },
+            tabs.forEach { tab ->
+                NavigationBarItem(
+                    selected = currentRoute == tab.route,
+                    onClick = {
+                        tabNavController.navigate(tab.route) {
+                            popUpTo(tabNavController.graph.startDestinationId) { saveState = true }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    },
+                    icon = { Icon(tab.icon, null) },
+                    label = { Text(tab.label, fontSize = 11.sp) },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor   = Coral,
+                        selectedTextColor   = Coral,
+                        unselectedIconColor = c.textTertiary,
+                        unselectedTextColor = c.textTertiary,
+                        indicatorColor      = CoralDim,
+                    ),
                 )
-            }
-            composable(BottomTab.Local.route) {
-                LocalRepoListScreen(rootEnabled = rootEnabled)
             }
         }
     }

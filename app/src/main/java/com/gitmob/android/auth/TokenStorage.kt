@@ -27,6 +27,7 @@ class TokenStorage(private val context: Context) {
         val THEME_MODE    = intPreferencesKey("theme_mode")
         val ROOT_ENABLED  = booleanPreferencesKey("root_enabled")
         val LOCAL_REPOS   = stringPreferencesKey("local_repos_json")   // JSON 列表
+        val BOOKMARKS     = stringPreferencesKey("file_bookmarks_json") // 自定义书签
     }
 
     val accessToken: Flow<String?> = context.dataStore.data.map { it[Keys.ACCESS_TOKEN] }
@@ -50,6 +51,10 @@ class TokenStorage(private val context: Context) {
         it[Keys.LOCAL_REPOS] ?: "[]"
     }
 
+    val bookmarksJson: Flow<String> = context.dataStore.data.map {
+        it[Keys.BOOKMARKS] ?: "[]"
+    }
+
     suspend fun saveToken(token: String) {
         context.dataStore.edit { it[Keys.ACCESS_TOKEN] = token }
     }
@@ -69,6 +74,10 @@ class TokenStorage(private val context: Context) {
 
     suspend fun saveLocalReposJson(json: String) {
         context.dataStore.edit { it[Keys.LOCAL_REPOS] = json }
+    }
+
+    suspend fun saveBookmarksJson(json: String) {
+        context.dataStore.edit { it[Keys.BOOKMARKS] = json }
     }
 
     suspend fun clear() { context.dataStore.edit { it.clear() } }
