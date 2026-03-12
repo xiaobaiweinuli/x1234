@@ -161,16 +161,29 @@ fun FilePickerScreen(
             errorMsg = null
             try {
                 val needsRoot = isPrivilegedPath(path)
+                // /storage/emulated/ 在 Android 11+ 普通 File API 经常返回空
+                // root 已开启时统一走 root 路径获得最完整的目录列表
+                val forceRoot = rootEnabled && RootManager.isGranted
                 val result = when {
-                    needsRoot && rootEnabled && RootManager.isGranted -> listViaRoot(path)
-                    needsRoot && rootEnabled && !RootManager.isGranted -> {
-                        // 尝试申请
+                    forceRoot -> listViaRoot(path)
+                    forceRoot && !RootManager.isGranted -> {
                         val granted = RootManager.requestRoot()
                         if (granted) listViaRoot(path)
-                        else throw RuntimeException("需要 Root 权限才能访问此目录。\n请在设置中启用 Root 模式并授权。")
+                        else listNormal(path)   // 降级，不报错
                     }
-                    needsRoot -> throw RuntimeException("此目录需要 Root 权限。\n请在设置中启用 Root 模式。")
-                    else -> listNormal(path)
+                    needsRoot && !rootEnabled ->
+                        throw RuntimeException("此目录需要 Root 权限。\n请在设置中启用 Root 模式。")
+                    else -> {
+                        val entries = listNormal(path)
+                        // /storage/emulated 普通权限为空时给出提示
+                        if (entries.isEmpty() && path.contains("/storage/emulated") && !rootEnabled) {
+                            throw RuntimeException(
+                                "无法读取此目录（Android 11+ 存储限制）。\n" +
+                                "请前往 设置→高级→文件访问权限 授权，\n或开启 Root 模式。"
+                            )
+                        }
+                        entries
+                    }
                 }
                 entries = result
                 currentPath = path       // 成功后才更新路径

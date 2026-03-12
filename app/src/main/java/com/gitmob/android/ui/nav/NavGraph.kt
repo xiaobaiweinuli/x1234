@@ -52,8 +52,9 @@ sealed class Route(val path: String) {
 }
 
 sealed class BottomTab(val route: String, val label: String, val icon: ImageVector) {
-    object Remote : BottomTab("tab_remote", "远程", Icons.Default.Cloud)
-    object Local  : BottomTab("tab_local",  "本地", Icons.Default.Folder)
+    object Remote   : BottomTab("tab_remote",   "远程",   Icons.Default.Cloud)
+    object Local    : BottomTab("tab_local",    "本地",   Icons.Default.Folder)
+    object Settings : BottomTab("tab_settings", "设置",   Icons.Default.Settings)
 }
 
 @Composable
@@ -95,29 +96,13 @@ fun AppNavGraph(
                 currentTheme         = currentTheme,
                 rootEnabled          = rootEnabled,
                 onThemeChange        = onThemeChange,
-                onNavigateToSettings = { navController.navigate(Route.Settings.path) },
+                onNavigateToSettings = { /* 已移入 Tab */ },
                 onRepoClick          = { owner, repo ->
                     navController.navigate(Route.RepoDetail.go(owner, repo))
                 },
                 onCreateRepo = { navController.navigate(Route.CreateRepo.path) },
                 localVm      = localVm,
-            )
-        }
-
-        composable(Route.Settings.path) {
-            val scope = rememberCoroutineScope()
-            val rootEnabled2 by tokenStorage.rootEnabled.collectAsState(initial = false)
-            SettingsScreen(
-                tokenStorage  = tokenStorage,
-                currentTheme  = currentTheme,
-                rootEnabled   = rootEnabled2,
-                onThemeChange = onThemeChange,
-                onRootToggle  = { enabled ->
-                    scope.launch { tokenStorage.setRootEnabled(enabled) }
-                },
-                onBack   = { navController.popBackStack() },
-                onLogout = {
-                    scope.launch { tokenStorage.clear() }
+                onLogout     = {
                     navController.navigate(Route.Login.path) { popUpTo(0) { inclusive = true } }
                 },
             )
@@ -184,9 +169,10 @@ private fun MainScreen(
     onRepoClick: (String, String) -> Unit,
     onCreateRepo: () -> Unit,
     localVm: LocalRepoViewModel,
+    onLogout: () -> Unit,
 ) {
     val c = LocalGmColors.current
-    val tabs = listOf(BottomTab.Remote, BottomTab.Local)
+    val tabs = listOf(BottomTab.Remote, BottomTab.Local, BottomTab.Settings)
     val tabNavController = rememberNavController()
     val navBackStack by tabNavController.currentBackStackEntryAsState()
     val currentRoute = navBackStack?.destination?.route
@@ -204,14 +190,29 @@ private fun MainScreen(
                     RepoListScreen(
                         onRepoClick    = onRepoClick,
                         onCreateRepo   = onCreateRepo,
-                        onProfileClick = onNavigateToSettings,
-                        // 克隆操作指向共享的 localVm，切换到本地 Tab 即可看到
                         onCloneRepo    = { url -> localVm.startClone(url) },
                     )
                 }
                 composable(BottomTab.Local.route) {
-                    // 传入共享 VM 实例，而非让屏幕内部自己创建
                     LocalRepoListScreen(rootEnabled = rootEnabled, vm = localVm)
+                }
+                composable(BottomTab.Settings.route) {
+                    val settingsScope = rememberCoroutineScope()
+                    val rootEnabled2 by tokenStorage.rootEnabled.collectAsState(initial = false)
+                    SettingsScreen(
+                        tokenStorage  = tokenStorage,
+                        currentTheme  = currentTheme,
+                        rootEnabled   = rootEnabled2,
+                        onThemeChange = onThemeChange,
+                        onRootToggle  = { enabled ->
+                            settingsScope.launch { tokenStorage.setRootEnabled(enabled) }
+                        },
+                        onBack   = { /* 底部 tab，无需返回 */ },
+                        onLogout = {
+                            settingsScope.launch { tokenStorage.clear() }
+                            onLogout()
+                        },
+                    )
                 }
             }
         }

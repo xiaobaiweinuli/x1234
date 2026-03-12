@@ -28,6 +28,7 @@ class TokenStorage(private val context: Context) {
         val ROOT_ENABLED  = booleanPreferencesKey("root_enabled")
         val LOCAL_REPOS   = stringPreferencesKey("local_repos_json")   // JSON 列表
         val BOOKMARKS     = stringPreferencesKey("file_bookmarks_json") // 自定义书签
+        val LOG_LEVEL     = intPreferencesKey("log_level")
     }
 
     val accessToken: Flow<String?> = context.dataStore.data.map { it[Keys.ACCESS_TOKEN] }
@@ -50,6 +51,8 @@ class TokenStorage(private val context: Context) {
     val localReposJson: Flow<String> = context.dataStore.data.map {
         it[Keys.LOCAL_REPOS] ?: "[]"
     }
+
+    val logLevel: Flow<Int> = context.dataStore.data.map { it[Keys.LOG_LEVEL] ?: 1 } // 默认 DEBUG=1
 
     val bookmarksJson: Flow<String> = context.dataStore.data.map {
         it[Keys.BOOKMARKS] ?: "[]"
@@ -74,6 +77,10 @@ class TokenStorage(private val context: Context) {
 
     suspend fun saveLocalReposJson(json: String) {
         context.dataStore.edit { it[Keys.LOCAL_REPOS] = json }
+    }
+
+    suspend fun setLogLevel(level: Int) {
+        context.dataStore.edit { it[Keys.LOG_LEVEL] = level }
     }
 
     suspend fun saveBookmarksJson(json: String) {

@@ -32,7 +32,6 @@ import com.gitmob.android.ui.theme.*
 fun RepoListScreen(
     onRepoClick: (String, String) -> Unit,
     onCreateRepo: () -> Unit,
-    onProfileClick: () -> Unit,
     onCloneRepo: (String) -> Unit = {},
     vm: RepoListViewModel = viewModel(),
 ) {
@@ -105,9 +104,6 @@ fun RepoListScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = onProfileClick) {
-                        Icon(Icons.Default.Settings, null, tint = c.textSecondary)
-                    }
                     IconButton(onClick = onCreateRepo) {
                         Icon(Icons.Default.Add, null, tint = Coral)
                     }
