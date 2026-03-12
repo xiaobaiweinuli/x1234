@@ -24,6 +24,10 @@ on:
 env:
   JAVA_VERSION: "17"
 
+permissions:
+  contents: write
+  actions: read
+
 jobs:
   build:
     name: Build APK
