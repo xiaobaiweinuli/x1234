@@ -29,6 +29,9 @@ import com.gitmob.android.ui.repo.RepoDetailViewModel
 import com.gitmob.android.ui.repos.RepoListScreen
 import com.gitmob.android.ui.settings.SettingsScreen
 import com.gitmob.android.ui.theme.LocalGmColors
+import com.gitmob.android.ui.theme.Coral
+import com.gitmob.android.ui.theme.CoralDim
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import java.net.URLDecoder
 import java.net.URLEncoder
@@ -90,7 +93,6 @@ fun AppNavGraph(
                 currentTheme = currentTheme,
                 rootEnabled = rootEnabled,
                 onThemeChange = onThemeChange,
-                onRootToggle = { /* handled in SettingsScreen */ },
                 onNavigateToSettings = { navController.navigate(Route.Settings.path) },
                 onRepoClick = { owner, repo -> navController.navigate(Route.RepoDetail.go(owner, repo)) },
                 onCreateRepo = { navController.navigate(Route.CreateRepo.path) },

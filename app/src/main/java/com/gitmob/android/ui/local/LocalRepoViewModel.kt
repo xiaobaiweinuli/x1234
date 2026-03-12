@@ -194,12 +194,16 @@ class LocalRepoViewModel(app: Application) : AndroidViewModel(app) {
     fun scanRepo(repoId: String) = viewModelScope.launch {
         val repo = _state.value.repos.find { it.id == repoId } ?: return@launch
         val isGit = GitRunner.isGitRepo(repo.path)
+        // suspend 调用必须在协程体内完成，不能放进普通 lambda
+        val branch    = if (isGit) GitRunner.currentBranch(repo.path) else null
+        val lastMsg   = if (isGit) GitRunner.lastCommitMsg(repo.path) else null
+        val remoteUrl = if (isGit) GitRunner.remoteUrl(repo.path) else null
         storage.update(repoId) {
             it.copy(
-                status = if (isGit) LocalRepoStatus.GIT_INITIALIZED else LocalRepoStatus.PENDING_INIT,
-                currentBranch = if (isGit) GitRunner.currentBranch(repo.path) else null,
-                lastCommit = if (isGit) GitRunner.lastCommitMsg(repo.path) else null,
-                remoteUrl = if (isGit) GitRunner.remoteUrl(repo.path) else null,
+                status        = if (isGit) LocalRepoStatus.GIT_INITIALIZED else LocalRepoStatus.PENDING_INIT,
+                currentBranch = branch,
+                lastCommit    = lastMsg,
+                remoteUrl     = remoteUrl,
             )
         }
     }
