@@ -4,9 +4,9 @@
  * 自定义域名: https://gitmob.16618888.xyz
  *
  * 路由:
- *   GET  /           → 展示 App 落地页
+ *   GET  /           → App 落地页（GitHub OAuth App 的 Homepage URL）
  *   GET  /auth        → 跳转 GitHub OAuth 授权
- *   GET  /callback    → 接收 code，换 token，重定向回 App
+ *   GET  /callback    → 接收 code，换 token，重定向回 App（HTML + JS 方式）
  *   GET  /health      → 健康检查
  *
  * 环境变量（CF Dashboard → Workers → Settings → Variables）:
@@ -19,18 +19,20 @@ export interface Env {
   GITHUB_CLIENT_SECRET: string;
 }
 
-const APP_SCHEME   = "gitmob://oauth";
-const REPO_URL     = "https://github.com/xiaobaiweinuli/GitMob-Android";
-const SCOPES       = "repo,user,delete_repo,admin:public_key,workflow";
+const APP_SCHEME = "gitmob://oauth";
+const REPO_URL   = "https://github.com/xiaobaiweinuli/GitMob-Android";
+const SCOPES     = "repo,user,delete_repo,admin:public_key,workflow";
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
-    if (request.method === "OPTIONS") return cors(new Response(null));
+    if (request.method === "OPTIONS") {
+      return new Response(null, { headers: corsHeaders() });
+    }
 
     switch (url.pathname) {
-      case "/":         return handleLanding(url);
+      case "/":         return handleLanding();
       case "/auth":     return handleAuth(url, env);
       case "/callback": return handleCallback(url, env);
       case "/health":   return json({ ok: true, ts: Date.now() });
@@ -39,8 +41,8 @@ export default {
   },
 };
 
-// ── 落地页（OAuth App Homepage URL 填这个） ──
-function handleLanding(url: URL): Response {
+// ── 落地页 ──
+function handleLanding(): Response {
   const html = `<!DOCTYPE html>
 <html lang="zh">
 <head>
@@ -52,8 +54,6 @@ function handleLanding(url: URL): Response {
     *{box-sizing:border-box;margin:0;padding:0}
     body{font-family:-apple-system,sans-serif;background:#0F1117;color:#E8EAF0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
     .card{background:#161B25;border:1px solid #2A3347;border-radius:20px;padding:40px 32px;max-width:420px;width:100%;text-align:center}
-    .icon{width:72px;height:72px;background:#FF6B4A22;border-radius:20px;display:inline-flex;align-items:center;justify-content:center;margin-bottom:20px}
-    .icon svg{width:40px;height:40px;fill:#FF6B4A}
     h1{font-size:28px;font-weight:700;color:#FF6B4A;letter-spacing:-1px;margin-bottom:8px}
     p{font-size:14px;color:#9BA3BA;line-height:1.6;margin-bottom:28px}
     .btn{display:inline-block;padding:12px 28px;background:#FF6B4A;color:#fff;border-radius:12px;text-decoration:none;font-weight:600;font-size:14px;margin:6px}
@@ -65,9 +65,6 @@ function handleLanding(url: URL): Response {
 </head>
 <body>
   <div class="card">
-    <div class="icon">
-      <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/></svg>
-    </div>
     <h1>GitMob</h1>
     <p>手机端 GitHub 原生管理工具<br/>Kotlin · Jetpack Compose · Material 3</p>
     <a href="${REPO_URL}/releases" class="btn">下载 APK</a>
@@ -86,10 +83,10 @@ function handleLanding(url: URL): Response {
   });
 }
 
-// ── /auth：生成授权 URL 并重定向 ──
+// ── /auth：跳转 GitHub 授权 ──
 function handleAuth(url: URL, env: Env): Response {
-  const state  = crypto.randomUUID();
-  const ghUrl  = new URL("https://github.com/login/oauth/authorize");
+  const state = crypto.randomUUID();
+  const ghUrl = new URL("https://github.com/login/oauth/authorize");
   ghUrl.searchParams.set("client_id",    env.GITHUB_CLIENT_ID);
   ghUrl.searchParams.set("redirect_uri", `${url.origin}/callback`);
   ghUrl.searchParams.set("scope",        SCOPES);
@@ -97,14 +94,16 @@ function handleAuth(url: URL, env: Env): Response {
   return Response.redirect(ghUrl.toString(), 302);
 }
 
-// ── /callback：code → token → App 深链接 ──
+// ── /callback：code → token → HTML 跳回 App ──
+// 关键：Chrome Custom Tab 不会自动跟随 302 到自定义 scheme（gitmob://）
+// 必须用 HTML + JS window.location 触发 Android intent，才能唤起 App
 async function handleCallback(url: URL, env: Env): Promise<Response> {
   const code  = url.searchParams.get("code");
   const error = url.searchParams.get("error");
 
   if (error || !code) {
     const desc = url.searchParams.get("error_description") ?? "authorization_failed";
-    return Response.redirect(`${APP_SCHEME}?error=${enc(desc)}`, 302);
+    return htmlRedirect(`${APP_SCHEME}?error=${enc(desc)}`, true);
   }
 
   try {
@@ -118,7 +117,7 @@ async function handleCallback(url: URL, env: Env): Promise<Response> {
       }),
     });
 
-    if (!res.ok) throw new Error(`GitHub: ${res.status}`);
+    if (!res.ok) throw new Error(`GitHub returned ${res.status}`);
 
     const data = await res.json() as {
       access_token?: string;
@@ -127,16 +126,87 @@ async function handleCallback(url: URL, env: Env): Promise<Response> {
     };
 
     if (data.error || !data.access_token) {
-      const desc = data.error_description ?? data.error ?? "token_failed";
-      return Response.redirect(`${APP_SCHEME}?error=${enc(desc)}`, 302);
+      const desc = data.error_description ?? data.error ?? "token_exchange_failed";
+      return htmlRedirect(`${APP_SCHEME}?error=${enc(desc)}`, true);
     }
 
-    return Response.redirect(`${APP_SCHEME}?token=${enc(data.access_token)}`, 302);
+    return htmlRedirect(`${APP_SCHEME}?token=${enc(data.access_token)}`, false);
 
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "unknown";
-    return Response.redirect(`${APP_SCHEME}?error=${enc(msg)}`, 302);
+    const msg = err instanceof Error ? err.message : "unknown_error";
+    return htmlRedirect(`${APP_SCHEME}?error=${enc(msg)}`, true);
   }
+}
+
+/**
+ * 返回一个 HTML 页面，通过 JS 立即跳转到 App 自定义 Scheme。
+ * 这比 302 直接跳 gitmob:// 更可靠：
+ *   - Android Custom Tab (Chrome) 会拦截 window.location 到 intent scheme
+ *   - 提供"手动打开 App"按钮作为降级方案
+ */
+function htmlRedirect(deepLink: string, isError: boolean): Response {
+  const title   = isError ? "授权失败" : "授权成功";
+  const color   = isError ? "#F87171"  : "#4ADE80";
+  const message = isError
+    ? "授权过程中出现错误，请返回 App 重试。"
+    : "授权成功！正在自动跳转回 GitMob…";
+
+  const html = `<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>GitMob — ${title}</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:-apple-system,sans-serif;background:#0F1117;color:#E8EAF0;
+         min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+    .card{background:#161B25;border:1px solid #2A3347;border-radius:20px;
+          padding:40px 28px;max-width:380px;width:100%;text-align:center}
+    .status{font-size:40px;margin-bottom:16px}
+    h2{font-size:20px;font-weight:600;color:${color};margin-bottom:10px}
+    p{font-size:14px;color:#9BA3BA;line-height:1.6;margin-bottom:24px}
+    .btn{display:inline-block;padding:13px 32px;background:#FF6B4A;color:#fff;
+         border-radius:12px;text-decoration:none;font-weight:600;font-size:15px;
+         cursor:pointer;border:none;width:100%}
+    .hint{font-size:12px;color:#5C6580;margin-top:14px}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="status">${isError ? "⚠️" : "✓"}</div>
+    <h2>${title}</h2>
+    <p>${message}</p>
+    <button class="btn" id="openBtn">打开 GitMob</button>
+    <p class="hint" id="hint"></p>
+  </div>
+  <script>
+    const deepLink = ${JSON.stringify(deepLink)};
+
+    function tryOpen() {
+      // 直接跳转自定义 scheme，Android 会触发 intent
+      window.location.href = deepLink;
+    }
+
+    document.getElementById('openBtn').addEventListener('click', tryOpen);
+
+    // 页面加载后自动尝试，给 300ms 让页面渲染完成
+    setTimeout(function() {
+      tryOpen();
+      // 2 秒后如果还在页面，说明未跳转，显示提示
+      setTimeout(function() {
+        document.getElementById('hint').textContent =
+          '如果未自动跳转，请点击上方按钮手动打开 GitMob';
+      }, 2000);
+    }, 300);
+  </script>
+</body>
+</html>`;
+
+  return new Response(html, {
+    status: 200,
+    headers: { "Content-Type": "text/html;charset=UTF-8", ...corsHeaders() },
+  });
 }
 
 // ── helpers ──
@@ -146,10 +216,6 @@ const corsHeaders = (): Record<string, string> => ({
   "Access-Control-Allow-Methods": "GET, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type",
 });
-const cors = (r: Response): Response => {
-  corsHeaders(); // just return headers applied response
-  return new Response(r.body, { ...r, headers: { ...Object.fromEntries(r.headers), ...corsHeaders() } });
-};
 const json = (data: unknown): Response =>
   new Response(JSON.stringify(data), {
     headers: { "Content-Type": "application/json", ...corsHeaders() },

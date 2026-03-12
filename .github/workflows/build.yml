@@ -107,7 +107,7 @@ jobs:
       # ── 8. 上传 Artifact ──
       - name: Upload Debug APK
         if: ${{ github.event.inputs.release_type == 'debug' || !startsWith(github.ref, 'refs/tags/') }}
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v4
         with:
           name: GitMob-debug-${{ steps.version.outputs.name }}
           path: app/build/outputs/apk/debug/*.apk
@@ -115,7 +115,7 @@ jobs:
 
       - name: Upload Release APK
         if: ${{ github.event.inputs.release_type == 'release' || startsWith(github.ref, 'refs/tags/') }}
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v4
         with:
           name: GitMob-release-${{ steps.version.outputs.name }}
           path: app/build/outputs/apk/release/*.apk

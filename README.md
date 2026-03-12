@@ -60,13 +60,19 @@ npm run deploy
 | Secret 名 | 说明 |
 |-----------|------|
 | `OAUTH_CLIENT_ID` | GitHub OAuth App 的 Client ID |
-| `OAUTH_WORKER_SUBDOMAIN` | Worker 子域（`bxiao` 部分） |
+| `OAUTH_CALLBACK_URL` | Worker 基础 URL，如 `https://gitmob.16618888.xyz` 或 `https://gitmob-oauth.bxiao.workers.dev` |
 | `KEYSTORE_BASE64` | `base64 -w 0 gitmob.jks` 输出内容 |
 | `KEYSTORE_PASSWORD` | Keystore 密码 |
 | `KEY_ALIAS` | Key alias |
 | `KEY_PASSWORD` | Key 密码 |
 
 > ⚠️ Secret 名不能以 `GITHUB_` 开头（GitHub 保留前缀）
+>
+> `OAUTH_CALLBACK_URL` 填完整基础 URL（不含 `/callback`），例如：
+> - 自定义域名：`https://gitmob.16618888.xyz`
+> - Workers 默认域：`https://gitmob-oauth.bxiao.workers.dev`
+>
+> Actions 会自动追加 `/callback` 写入 App。
 >
 > `OAUTH_CALLBACK_URL` 填完整基础 URL，不含 `/callback`，例如：
 > - 自定义域名：`https://gitmob.16618888.xyz`
