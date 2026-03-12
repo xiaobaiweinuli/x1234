@@ -9,6 +9,8 @@ import androidx.compose.runtime.*
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.lifecycleScope
 import com.gitmob.android.auth.TokenStorage
+import com.gitmob.android.data.ThemeMode
+import com.gitmob.android.data.ThemePreference
 import com.gitmob.android.ui.nav.AppNavGraph
 import com.gitmob.android.ui.theme.GitMobTheme
 import kotlinx.coroutines.flow.first
@@ -17,6 +19,7 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
 
     private lateinit var tokenStorage: TokenStorage
+    private lateinit var themePref: ThemePreference
     private var pendingToken: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -25,22 +28,26 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         tokenStorage = (application as GitMobApp).tokenStorage
-        var startDestChecked = false
+        themePref    = ThemePreference(this)
+        var ready    = false
 
-        splash.setKeepOnScreenCondition { !startDestChecked }
+        splash.setKeepOnScreenCondition { !ready }
 
         lifecycleScope.launch {
-            tokenStorage.accessToken.first() // 等待读取完成
-            startDestChecked = true
+            tokenStorage.accessToken.first()
+            ready = true
         }
 
         handleIntent(intent)
 
         setContent {
-            GitMobTheme {
+            // 监听主题偏好，默认浅色
+            val themeMode by themePref.themeMode.collectAsState(initial = ThemeMode.LIGHT)
+
+            GitMobTheme(themeMode = themeMode) {
                 AppNavGraph(
-                    tokenStorage = tokenStorage,
-                    initialToken = pendingToken
+                    tokenStorage  = tokenStorage,
+                    initialToken  = pendingToken,
                 )
             }
         }

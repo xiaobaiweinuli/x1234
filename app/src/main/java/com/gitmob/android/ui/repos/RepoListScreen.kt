@@ -9,9 +9,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
@@ -51,7 +51,7 @@ fun RepoListScreen(
                 },
                 actions = {
                     IconButton(onClick = onProfileClick) {
-                        Icon(Icons.Default.Person, contentDescription = "Profile", tint = TextSecondary)
+                        Icon(Icons.Default.Settings, contentDescription = "Settings", tint = TextSecondary)
                     }
                     IconButton(onClick = onCreateRepo) {
                         Icon(Icons.Default.Add, contentDescription = "New repo", tint = Coral)

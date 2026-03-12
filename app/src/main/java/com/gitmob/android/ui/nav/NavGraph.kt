@@ -22,6 +22,7 @@ import com.gitmob.android.ui.create.CreateRepoScreen
 import com.gitmob.android.ui.login.LoginScreen
 import com.gitmob.android.ui.repo.RepoDetailScreen
 import com.gitmob.android.ui.repos.RepoListScreen
+import com.gitmob.android.ui.settings.SettingsScreen
 import com.gitmob.android.ui.theme.BgDeep
 import com.gitmob.android.ui.theme.TextPrimary
 import com.gitmob.android.ui.theme.TextSecondary
@@ -36,6 +37,7 @@ sealed class Route(val path: String) {
     object RepoDetail : Route("repo/{owner}/{repo}") {
         fun go(owner: String, repo: String) = "repo/$owner/$repo"
     }
+    object Settings : Route("settings")
     object FileViewer : Route("file/{owner}/{repo}/{branch}?path={path}") {
         fun go(owner: String, repo: String, path: String, branch: String) =
             "file/$owner/$repo/$branch?path=${URLEncoder.encode(path, "UTF-8")}"
@@ -46,6 +48,7 @@ sealed class Route(val path: String) {
 fun AppNavGraph(
     tokenStorage: TokenStorage,
     initialToken: String?,
+    onThemeChange: (com.gitmob.android.data.ThemeMode) -> Unit = {},
 ) {
     val navController = rememberNavController()
     var startDest by remember { mutableStateOf<String?>(null) }
@@ -76,7 +79,7 @@ fun AppNavGraph(
                     navController.navigate(Route.RepoDetail.go(owner, repo))
                 },
                 onCreateRepo = { navController.navigate(Route.CreateRepo.path) },
-                onProfileClick = {},
+                onProfileClick = { navController.navigate(Route.Settings.path) },
             )
         }
 
@@ -105,6 +108,17 @@ fun AppNavGraph(
                 onCreated = { owner, repo ->
                     navController.navigate(Route.RepoDetail.go(owner, repo)) {
                         popUpTo(Route.CreateRepo.path) { inclusive = true }
+                    }
+                },
+            )
+        }
+
+        composable(Route.Settings.path) {
+            SettingsScreen(
+                onBack = { navController.popBackStack() },
+                onLogout = {
+                    navController.navigate(Route.Login.path) {
+                        popUpTo(0) { inclusive = true }
                     }
                 },
             )

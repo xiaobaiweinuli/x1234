@@ -14,7 +14,6 @@
     <style name="Theme.GitMob.Base" parent="android:Theme.Material.NoActionBar">
         <item name="android:statusBarColor">#0F1117</item>
         <item name="android:navigationBarColor">#0F1117</item>
-        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
         <item name="android:windowBackground">#0F1117</item>
     </style>
 </resources>

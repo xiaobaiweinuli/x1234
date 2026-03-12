@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- API 27+ 才支持 windowLayoutInDisplayCutoutMode -->
+    <style name="Theme.GitMob.Base" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">#0F1117</item>
+        <item name="android:navigationBarColor">#0F1117</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+        <item name="android:windowBackground">#FFFFFFFF</item>
+    </style>
+</resources>
