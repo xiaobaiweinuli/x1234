@@ -24,6 +24,8 @@ import com.gitmob.android.ui.common.LoadingBox
 import com.gitmob.android.ui.create.CreateRepoScreen
 import com.gitmob.android.ui.local.LocalRepoListScreen
 import com.gitmob.android.ui.local.LocalRepoViewModel
+import com.gitmob.android.ui.filepicker.FilePickerScreen
+import com.gitmob.android.ui.filepicker.PickerMode
 import com.gitmob.android.ui.login.LoginScreen
 import com.gitmob.android.ui.repo.RepoDetailScreen
 import com.gitmob.android.ui.repo.RepoDetailViewModel
@@ -180,6 +182,26 @@ private fun MainScreen(
     // 用 Column 替代 Scaffold：避免嵌套 Scaffold 造成 bottomBar insets 重复
     Column(modifier = Modifier.fillMaxSize()) {
 
+        // 观察共享 VM 的克隆状态，在此层级弹出文件选择器
+        val vmState by localVm.state.collectAsState()
+        val vmBookmarks by localVm.customBookmarks.collectAsState()
+
+        // 克隆文件选择器：提升到 MainScreen 层级，不依赖 Tab 是否活跃
+        if (vmState.showClonePicker) {
+            FilePickerScreen(
+                title = "选择克隆目标目录",
+                mode = PickerMode.DIRECTORY,
+                rootEnabled = rootEnabled,
+                customBookmarks = vmBookmarks,
+                onAddBookmark    = { bm -> localVm.addBookmark(bm) },
+                onRemoveBookmark = { bm -> localVm.removeBookmark(bm) },
+                onConfirm = { path, _ ->
+                    localVm.cloneRepo(vmState.pendingCloneUrl, path)
+                },
+                onDismiss = localVm::hideClonePicker,
+            )
+        } else {
+
         // 上部内容区域（Tab 页面各自有自己的 Scaffold + TopAppBar）
         Box(modifier = Modifier.weight(1f)) {
             NavHost(
@@ -245,6 +267,7 @@ private fun MainScreen(
                 )
             }
         }
+        } // end else (not cloning)
     }
 }
 

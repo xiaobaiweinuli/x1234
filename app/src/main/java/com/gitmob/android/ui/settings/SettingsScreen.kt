@@ -39,6 +39,12 @@ import com.gitmob.android.ui.theme.*
 import com.gitmob.android.util.LogLevel
 import com.gitmob.android.util.LogManager
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.ui.text.font.FontFamily
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -518,7 +524,7 @@ private fun LogViewerDialog(
             HorizontalDivider(color = c.border, thickness = 0.5.dp)
 
             // 日志列表
-            androidx.compose.foundation.lazy.LazyColumn(
+            LazyColumn(
                 modifier = Modifier.weight(1f)
                     .background(Color(0xFF080C12), RoundedCornerShape(10.dp))
                     .padding(8.dp),
@@ -529,7 +535,7 @@ private fun LogViewerDialog(
                     item { Text("暂无日志", fontSize = 12.sp, color = Color(0xFF5C6580),
                         modifier = Modifier.padding(8.dp)) }
                 } else {
-                    androidx.compose.foundation.lazy.items(logs) { entry ->
+                    items(logs) { entry ->
                         val color = when (entry.level) {
                             LogLevel.VERBOSE -> PurpleColor
                             LogLevel.DEBUG   -> BlueColor
@@ -541,10 +547,10 @@ private fun LogViewerDialog(
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text("${entry.time} [${entry.level.tag}]",
                                 fontSize = 10.sp, color = Color(0xFF5C6580),
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+                                fontFamily = FontFamily.Monospace)
                             Text("${entry.tag}: ${entry.msg}",
                                 fontSize = 10.sp, color = color,
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                fontFamily = FontFamily.Monospace,
                                 lineHeight = 14.sp)
                         }
                     }
@@ -556,7 +562,7 @@ private fun LogViewerDialog(
             Text(
                 "日志文件：${logFile?.absolutePath ?: "未初始化"}",
                 fontSize = 10.sp, color = c.textTertiary,
-                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                fontFamily = FontFamily.Monospace,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
 
