@@ -33,6 +33,7 @@ fun RepoListScreen(
     onRepoClick: (String, String) -> Unit,
     onCreateRepo: () -> Unit,
     onProfileClick: () -> Unit,
+    onCloneRepo: (String) -> Unit = {},
     vm: RepoListViewModel = viewModel(),
 ) {
     val c = LocalGmColors.current
@@ -180,6 +181,7 @@ fun RepoListScreen(
                             onDelete = { vm.deleteRepo(repo.owner.login, repo.name) },
                             onRename = { newName -> vm.renameRepo(repo.owner.login, repo.name, newName) },
                             onEdit = { desc, site, topics -> vm.editRepo(repo.owner.login, repo.name, desc, site, topics) },
+                            onClone = { url -> onCloneRepo(url) },
                             c = c,
                         )
                     }
@@ -214,6 +216,7 @@ fun SwipeableRepoCard(
     onDelete: () -> Unit,
     onRename: (String) -> Unit,
     onEdit: (String, String, List<String>) -> Unit,
+    onClone: (String) -> Unit,
     c: GmColors,
 ) {
     var showDeleteDialog by remember { mutableStateOf(false) }
@@ -254,6 +257,7 @@ fun SwipeableRepoCard(
         RepoCardContent(repo = repo, onClick = onClick,
             onRename = { showRenameDialog = true },
             onEdit = { showEditDialog = true },
+            onClone = { onClone(repo.cloneUrl) },
             c = c)
     }
 
@@ -290,6 +294,7 @@ private fun RepoCardContent(
     onClick: () -> Unit,
     onRename: () -> Unit,
     onEdit: () -> Unit,
+    onClone: () -> Unit,
     c: GmColors,
 ) {
     var showMenu by remember { mutableStateOf(false) }
@@ -323,6 +328,11 @@ private fun RepoCardContent(
                         text = { Text("编辑信息", fontSize = 14.sp, color = c.textPrimary) },
                         leadingIcon = { Icon(Icons.Default.Edit, null, tint = c.textSecondary, modifier = Modifier.size(16.dp)) },
                         onClick = { onEdit(); showMenu = false },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("克隆到本地", fontSize = 14.sp, color = c.textPrimary) },
+                        leadingIcon = { Icon(Icons.Default.Download, null, tint = BlueColor, modifier = Modifier.size(16.dp)) },
+                        onClick = { onClone(); showMenu = false },
                     )
                 }
             }

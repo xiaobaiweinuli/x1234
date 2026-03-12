@@ -20,11 +20,13 @@ enum class ThemeMode(val value: Int) {
 class TokenStorage(private val context: Context) {
 
     private object Keys {
-        val ACCESS_TOKEN = stringPreferencesKey("access_token")
-        val USER_LOGIN   = stringPreferencesKey("user_login")
-        val USER_NAME    = stringPreferencesKey("user_name")
-        val AVATAR_URL   = stringPreferencesKey("avatar_url")
-        val THEME_MODE   = intPreferencesKey("theme_mode")
+        val ACCESS_TOKEN  = stringPreferencesKey("access_token")
+        val USER_LOGIN    = stringPreferencesKey("user_login")
+        val USER_NAME     = stringPreferencesKey("user_name")
+        val AVATAR_URL    = stringPreferencesKey("avatar_url")
+        val THEME_MODE    = intPreferencesKey("theme_mode")
+        val ROOT_ENABLED  = booleanPreferencesKey("root_enabled")
+        val LOCAL_REPOS   = stringPreferencesKey("local_repos_json")   // JSON 列表
     }
 
     val accessToken: Flow<String?> = context.dataStore.data.map { it[Keys.ACCESS_TOKEN] }
@@ -40,6 +42,14 @@ class TokenStorage(private val context: Context) {
         ThemeMode.fromInt(it[Keys.THEME_MODE] ?: ThemeMode.LIGHT.value)
     }
 
+    val rootEnabled: Flow<Boolean> = context.dataStore.data.map {
+        it[Keys.ROOT_ENABLED] ?: false
+    }
+
+    val localReposJson: Flow<String> = context.dataStore.data.map {
+        it[Keys.LOCAL_REPOS] ?: "[]"
+    }
+
     suspend fun saveToken(token: String) {
         context.dataStore.edit { it[Keys.ACCESS_TOKEN] = token }
     }
@@ -53,5 +63,13 @@ class TokenStorage(private val context: Context) {
     suspend fun setThemeMode(mode: ThemeMode) {
         context.dataStore.edit { it[Keys.THEME_MODE] = mode.value }
     }
+    suspend fun setRootEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.ROOT_ENABLED] = enabled }
+    }
+
+    suspend fun saveLocalReposJson(json: String) {
+        context.dataStore.edit { it[Keys.LOCAL_REPOS] = json }
+    }
+
     suspend fun clear() { context.dataStore.edit { it.clear() } }
 }

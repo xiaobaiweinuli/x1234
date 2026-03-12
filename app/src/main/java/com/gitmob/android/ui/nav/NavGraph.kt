@@ -1,13 +1,14 @@
 package com.gitmob.android.ui.nav
 
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -21,6 +22,7 @@ import com.gitmob.android.data.RepoRepository
 import com.gitmob.android.ui.common.ErrorBox
 import com.gitmob.android.ui.common.LoadingBox
 import com.gitmob.android.ui.create.CreateRepoScreen
+import com.gitmob.android.ui.local.LocalRepoListScreen
 import com.gitmob.android.ui.login.LoginScreen
 import com.gitmob.android.ui.repo.RepoDetailScreen
 import com.gitmob.android.ui.repo.RepoDetailViewModel
@@ -33,7 +35,7 @@ import java.net.URLEncoder
 
 sealed class Route(val path: String) {
     object Login      : Route("login")
-    object RepoList   : Route("repos")
+    object Main       : Route("main")    // 含底部导航的宿主
     object CreateRepo : Route("create_repo")
     object Settings   : Route("settings")
     object RepoDetail : Route("repo/{owner}/{repo}") {
@@ -45,6 +47,12 @@ sealed class Route(val path: String) {
     }
 }
 
+/** 底部导航 Tab 定义 */
+sealed class BottomTab(val route: String, val label: String, val icon: ImageVector) {
+    object Remote : BottomTab("tab_remote", "远程", Icons.Default.Cloud)
+    object Local  : BottomTab("tab_local",  "本地", Icons.Default.Folder)
+}
+
 @Composable
 fun AppNavGraph(
     tokenStorage: TokenStorage,
@@ -54,12 +62,12 @@ fun AppNavGraph(
     val navController = rememberNavController()
     var startDest by remember { mutableStateOf<String?>(null) }
     val currentTheme by tokenStorage.themeMode.collectAsState(initial = ThemeMode.LIGHT)
+    val rootEnabled by tokenStorage.rootEnabled.collectAsState(initial = false)
 
     LaunchedEffect(Unit) {
         val token = tokenStorage.accessToken.first()
-        startDest = if (token.isNullOrBlank()) Route.Login.path else Route.RepoList.path
+        startDest = if (token.isNullOrBlank()) Route.Login.path else Route.Main.path
     }
-
     if (startDest == null) return
 
     NavHost(navController = navController, startDestination = startDest!!) {
@@ -68,38 +76,44 @@ fun AppNavGraph(
             LoginScreen(
                 pendingToken = initialToken,
                 onSuccess = {
-                    navController.navigate(Route.RepoList.path) {
+                    navController.navigate(Route.Main.path) {
                         popUpTo(Route.Login.path) { inclusive = true }
                     }
                 },
             )
         }
 
-        composable(Route.RepoList.path) {
-            RepoListScreen(
-                onRepoClick   = { owner, repo -> navController.navigate(Route.RepoDetail.go(owner, repo)) },
-                onCreateRepo  = { navController.navigate(Route.CreateRepo.path) },
-                onProfileClick = { navController.navigate(Route.Settings.path) },
+        // ── 主界面（含底部导航）────────────────────────────────
+        composable(Route.Main.path) {
+            MainScreen(
+                tokenStorage = tokenStorage,
+                currentTheme = currentTheme,
+                rootEnabled = rootEnabled,
+                onThemeChange = onThemeChange,
+                onRootToggle = { /* handled in SettingsScreen */ },
+                onNavigateToSettings = { navController.navigate(Route.Settings.path) },
+                onRepoClick = { owner, repo -> navController.navigate(Route.RepoDetail.go(owner, repo)) },
+                onCreateRepo = { navController.navigate(Route.CreateRepo.path) },
             )
         }
 
-        composable(
-            route = Route.RepoDetail.path,
-            arguments = listOf(
-                navArgument("owner") { type = NavType.StringType },
-                navArgument("repo")  { type = NavType.StringType },
-            ),
-        ) { back ->
-            val owner = back.arguments?.getString("owner") ?: ""
-            val repo  = back.arguments?.getString("repo")  ?: ""
-            RepoDetailScreen(
-                owner    = owner,
-                repoName = repo,
-                onBack   = { navController.popBackStack() },
-                onFileClick = { o, r, path, branch ->
-                    navController.navigate(Route.FileViewer.go(o, r, path, branch))
+        composable(Route.Settings.path) {
+            val scope = rememberCoroutineScope()
+            SettingsScreen(
+                tokenStorage  = tokenStorage,
+                currentTheme  = currentTheme,
+                rootEnabled   = rootEnabled,
+                onThemeChange = onThemeChange,
+                onRootToggle  = { enabled ->
+                    scope.launch { tokenStorage.setRootEnabled(enabled) }
                 },
-                vm = viewModel(factory = RepoDetailViewModel.factory(owner, repo)),
+                onBack  = { navController.popBackStack() },
+                onLogout = {
+                    scope.launch { tokenStorage.clear() }
+                    navController.navigate(Route.Login.path) {
+                        popUpTo(0) { inclusive = true }
+                    }
+                },
             )
         }
 
@@ -114,17 +128,22 @@ fun AppNavGraph(
             )
         }
 
-        composable(Route.Settings.path) {
-            SettingsScreen(
-                tokenStorage  = tokenStorage,
-                currentTheme  = currentTheme,
-                onThemeChange = onThemeChange,
-                onBack        = { navController.popBackStack() },
-                onLogout      = {
-                    navController.navigate(Route.Login.path) {
-                        popUpTo(0) { inclusive = true }
-                    }
+        composable(
+            route = "repo/{owner}/{repo}",
+            arguments = listOf(
+                navArgument("owner") { type = NavType.StringType },
+                navArgument("repo")  { type = NavType.StringType },
+            ),
+        ) { back ->
+            val owner = back.arguments?.getString("owner") ?: ""
+            val repo  = back.arguments?.getString("repo")  ?: ""
+            RepoDetailScreen(
+                owner = owner, repoName = repo,
+                onBack = { navController.popBackStack() },
+                onFileClick = { o, r, path, branch ->
+                    navController.navigate(Route.FileViewer.go(o, r, path, branch))
                 },
+                vm = viewModel(factory = RepoDetailViewModel.factory(owner, repo)),
             )
         }
 
@@ -147,11 +166,81 @@ fun AppNavGraph(
     }
 }
 
+@Composable
+private fun MainScreen(
+    tokenStorage: TokenStorage,
+    currentTheme: ThemeMode,
+    rootEnabled: Boolean,
+    onThemeChange: (ThemeMode) -> Unit,
+    onNavigateToSettings: () -> Unit,
+    onRepoClick: (String, String) -> Unit,
+    onCreateRepo: () -> Unit,
+) {
+    val c = LocalGmColors.current
+    val tabs = listOf(BottomTab.Remote, BottomTab.Local)
+    val tabNavController = rememberNavController()
+    val navBackStack by tabNavController.currentBackStackEntryAsState()
+    val currentRoute = navBackStack?.destination?.route
+
+    Scaffold(
+        containerColor = c.bgDeep,
+        bottomBar = {
+            NavigationBar(
+                containerColor = c.bgCard,
+                tonalElevation = 0.dp,
+            ) {
+                tabs.forEach { tab ->
+                    NavigationBarItem(
+                        selected = currentRoute == tab.route,
+                        onClick = {
+                            tabNavController.navigate(tab.route) {
+                                popUpTo(tabNavController.graph.startDestinationId) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        },
+                        icon = { Icon(tab.icon, null) },
+                        label = { Text(tab.label, fontSize = 11.sp) },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = Coral,
+                            selectedTextColor = Coral,
+                            unselectedIconColor = c.textTertiary,
+                            unselectedTextColor = c.textTertiary,
+                            indicatorColor = CoralDim,
+                        ),
+                    )
+                }
+            }
+        },
+    ) { innerPadding ->
+        NavHost(
+            navController = tabNavController,
+            startDestination = BottomTab.Remote.route,
+            modifier = Modifier.padding(innerPadding),
+        ) {
+            composable(BottomTab.Remote.route) {
+                // 共享同一个 LocalRepoViewModel 用于触发克隆
+                val localVm: com.gitmob.android.ui.local.LocalRepoViewModel = viewModel()
+                RepoListScreen(
+                    onRepoClick    = onRepoClick,
+                    onCreateRepo   = onCreateRepo,
+                    onProfileClick = onNavigateToSettings,
+                    onCloneRepo    = { url -> localVm.startClone(url) },
+                )
+            }
+            composable(BottomTab.Local.route) {
+                LocalRepoListScreen(rootEnabled = rootEnabled)
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FileViewerScreen(
     owner: String, repo: String, path: String, ref: String, onBack: () -> Unit,
 ) {
+    val c = LocalGmColors.current
     val repository = remember { RepoRepository() }
     var content by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(true) }
@@ -165,21 +254,19 @@ fun FileViewerScreen(
     }
 
     Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
+        containerColor = c.bgDeep,
         topBar = {
             TopAppBar(
                 title = {
                     Text(path.substringAfterLast("/"), fontWeight = FontWeight.Medium,
-                        fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurface)
+                        fontSize = 15.sp, color = c.textPrimary)
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = c.textSecondary)
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background),
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = c.bgDeep),
             )
         },
     ) { padding ->
@@ -192,7 +279,7 @@ fun FileViewerScreen(
             ) {
                 item {
                     Text(content, fontSize = 12.sp, fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurface, lineHeight = 18.sp)
+                        color = c.textPrimary, lineHeight = 18.sp)
                 }
             }
         }

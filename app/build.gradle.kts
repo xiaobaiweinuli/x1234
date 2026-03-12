@@ -80,5 +80,7 @@ dependencies {
     implementation(libs.gson)
     implementation(libs.coil.compose)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.libsu.core)
+    implementation(libs.libsu.service)
     debugImplementation(libs.androidx.ui.tooling)
 }
