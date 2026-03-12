@@ -214,9 +214,9 @@ interface GitHubApi {
         @Body body: GHRenameBranchRequest,
     ): GHBranch
 
-    // ── Commit detail ──
+    // ── Commit detail (full with files) ──
     @GET("repos/{owner}/{repo}/commits/{sha}")
-    suspend fun getCommit(
+    suspend fun getCommitFull(
         @Path("owner") owner: String,
         @Path("repo") repo: String,
         @Path("sha") sha: String,

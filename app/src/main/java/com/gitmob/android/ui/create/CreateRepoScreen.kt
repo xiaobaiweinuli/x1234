@@ -18,15 +18,16 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.gitmob.android.api.GHCreateRepoRequest
 import com.gitmob.android.data.RepoRepository
+import com.gitmob.android.ui.theme.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import com.gitmob.android.ui.theme.*
 
 class CreateRepoViewModel(app: Application) : AndroidViewModel(app) {
     private val repo = RepoRepository()
-    private val _done = MutableStateFlow<String?>(null) // fullName on success
+    private val _done = MutableStateFlow<String?>(null)
     val done = _done.asStateFlow()
     private val _error = MutableStateFlow<String?>(null)
     val error = _error.asStateFlow()
@@ -38,7 +39,14 @@ class CreateRepoViewModel(app: Application) : AndroidViewModel(app) {
             _loading.value = true
             _error.value = null
             try {
-                val r = repo.createRepo(name.trim(), desc.trim().ifEmpty { null }, private, autoInit)
+                val r = repo.createRepo(
+                    GHCreateRepoRequest(
+                        name = name.trim(),
+                        description = desc.trim().ifEmpty { null },
+                        private = private,
+                        autoInit = autoInit,
+                    )
+                )
                 _done.value = r.fullName
             } catch (e: Exception) {
                 _error.value = e.message ?: "创建失败"
@@ -53,13 +61,13 @@ class CreateRepoViewModel(app: Application) : AndroidViewModel(app) {
 @Composable
 fun CreateRepoScreen(
     onBack: () -> Unit,
-    onCreated: (String, String) -> Unit, // owner, repo
+    onCreated: (String, String) -> Unit,
     vm: CreateRepoViewModel = viewModel(),
 ) {
     val c = LocalGmColors.current
     var name by remember { mutableStateOf("") }
     var desc by remember { mutableStateOf("") }
-    var private by remember { mutableStateOf(false) }
+    var isPrivate by remember { mutableStateOf(false) }
     var autoInit by remember { mutableStateOf(true) }
 
     val done by vm.done.collectAsState()
@@ -77,7 +85,9 @@ fun CreateRepoScreen(
         containerColor = c.bgDeep,
         topBar = {
             TopAppBar(
-                title = { Text("新建仓库", fontWeight = FontWeight.SemiBold, color = c.textPrimary) },
+                title = {
+                    Text("新建仓库", fontWeight = FontWeight.SemiBold, color = c.textPrimary)
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = c.textSecondary)
@@ -95,21 +105,109 @@ fun CreateRepoScreen(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            FormField(label = "仓库名称 *", value = name, onValueChange = { name = it }, placeholder = "my-project", singleLine = true)
-            FormField(label = "描述（可选）", value = desc, onValueChange = { desc = it }, placeholder = "项目描述...", singleLine = false)
+            // 仓库名称
+            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text("仓库名称 *", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = c.textSecondary)
+                OutlinedTextField(
+                    value = name, onValueChange = { name = it },
+                    placeholder = { Text("my-project", color = c.textTertiary, fontSize = 14.sp) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Coral,
+                        unfocusedBorderColor = c.border,
+                        focusedContainerColor = c.bgCard,
+                        unfocusedContainerColor = c.bgCard,
+                        focusedTextColor = c.textPrimary,
+                        unfocusedTextColor = c.textPrimary,
+                    ),
+                )
+            }
 
-            ToggleCard(label = "私有仓库", sub = "仅自己可见", checked = private, onToggle = { private = it })
-            ToggleCard(label = "自动初始化 README", sub = "创建后即可克隆", checked = autoInit, onToggle = { autoInit = it })
+            // 描述
+            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text("描述（可选）", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = c.textSecondary)
+                OutlinedTextField(
+                    value = desc, onValueChange = { desc = it },
+                    placeholder = { Text("项目描述...", color = c.textTertiary, fontSize = 14.sp) },
+                    singleLine = false,
+                    minLines = 3,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Coral,
+                        unfocusedBorderColor = c.border,
+                        focusedContainerColor = c.bgCard,
+                        unfocusedContainerColor = c.bgCard,
+                        focusedTextColor = c.textPrimary,
+                        unfocusedTextColor = c.textPrimary,
+                    ),
+                )
+            }
+
+            // 私有开关
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(c.bgCard, RoundedCornerShape(12.dp))
+                    .padding(14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column {
+                    Text("私有仓库", fontSize = 14.sp, color = c.textPrimary)
+                    Text("仅自己可见", fontSize = 11.sp, color = c.textTertiary,
+                        modifier = Modifier.padding(top = 2.dp))
+                }
+                Switch(
+                    checked = isPrivate, onCheckedChange = { isPrivate = it },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = Coral,
+                        uncheckedThumbColor = c.textTertiary,
+                        uncheckedTrackColor = c.bgItem,
+                    ),
+                )
+            }
+
+            // 自动初始化 README
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(c.bgCard, RoundedCornerShape(12.dp))
+                    .padding(14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column {
+                    Text("自动初始化 README", fontSize = 14.sp, color = c.textPrimary)
+                    Text("创建后即可克隆", fontSize = 11.sp, color = c.textTertiary,
+                        modifier = Modifier.padding(top = 2.dp))
+                }
+                Switch(
+                    checked = autoInit, onCheckedChange = { autoInit = it },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = Coral,
+                        uncheckedThumbColor = c.textTertiary,
+                        uncheckedTrackColor = c.bgItem,
+                    ),
+                )
+            }
 
             if (error != null) {
-                Text(error!!, color = RedColor, fontSize = 13.sp,
-                    modifier = Modifier.background(RedDim, RoundedCornerShape(8.dp)).padding(10.dp).fillMaxWidth())
+                Text(
+                    error!!,
+                    color = RedColor,
+                    fontSize = 13.sp,
+                    modifier = Modifier
+                        .background(RedDim, RoundedCornerShape(8.dp))
+                        .padding(10.dp)
+                        .fillMaxWidth(),
+                )
             }
 
             Button(
-                onClick = {
-                    if (name.isNotBlank()) vm.create(name, desc, private, autoInit)
-                },
+                onClick = { if (name.isNotBlank()) vm.create(name, desc, isPrivate, autoInit) },
                 modifier = Modifier.fillMaxWidth().height(50.dp),
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Coral),
@@ -122,45 +220,5 @@ fun CreateRepoScreen(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun FormField(label: String, value: String, onValueChange: (String) -> Unit, placeholder: String, singleLine: Boolean) {
-    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-        Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = c.textSecondary)
-        OutlinedTextField(
-            value = value, onValueChange = onValueChange,
-            placeholder = { Text(placeholder, color = c.textTertiary, fontSize = 14.sp) },
-            singleLine = singleLine,
-            minLines = if (singleLine) 1 else 3,
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedc.borderColor = Coral, unfocusedc.borderColor = c.border,
-                focusedContainerColor = c.bgCard, unfocusedContainerColor = c.bgCard,
-                focusedTextColor = c.textPrimary, unfocusedTextColor = c.textPrimary,
-            ),
-        )
-    }
-}
-
-@Composable
-private fun ToggleCard(label: String, sub: String, checked: Boolean, onToggle: (Boolean) -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth().background(c.bgCard, RoundedCornerShape(12.dp)).padding(14.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-        Column {
-            Text(label, fontSize = 14.sp, color = c.textPrimary)
-            Text(sub, fontSize = 11.sp, color = c.textTertiary, modifier = Modifier.padding(top = 2.dp))
-        }
-        Switch(
-            checked = checked, onCheckedChange = onToggle,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = Color.White, checkedTrackColor = Coral,
-                uncheckedThumbColor = c.textTertiary, uncheckedTrackColor = c.bgItem,
-            ),
-        )
     }
 }

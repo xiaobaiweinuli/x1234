@@ -3,6 +3,7 @@ package com.gitmob.android.ui.settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -11,15 +12,14 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.gitmob.android.auth.ThemeMode
 import com.gitmob.android.auth.TokenStorage
 import com.gitmob.android.ui.theme.*
-import com.gitmob.android.ui.theme.LocalGmColors
-import com.gitmob.android.ui.theme.GmColors
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -37,16 +37,15 @@ fun SettingsScreen(
         containerColor = c.bgDeep,
         topBar = {
             TopAppBar(
-                title = { Text("设置", fontWeight = FontWeight.SemiBold, fontSize = 17.sp) },
+                title = {
+                    Text("设置", fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = c.textPrimary)
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null,
-                            tint = c.textPrimaryVariant)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = c.textSecondary)
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = c.bgDeep,
-                ),
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = c.bgDeep),
             )
         },
     ) { padding ->
@@ -59,35 +58,45 @@ fun SettingsScreen(
         ) {
             // 当前账号
             if (profile != null) {
-                SectionLabel("账号")
-                SettingCard {
+                SectionLabel("账号", c)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(c.bgCard, RoundedCornerShape(14.dp)),
+                ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         modifier = Modifier.fillMaxWidth().padding(14.dp),
                     ) {
-                        coil.compose.AsyncImage(
+                        AsyncImage(
                             model = profile!!.third,
                             contentDescription = null,
                             modifier = Modifier
                                 .size(42.dp)
-                                .background(
-                                    c.bgCardVariant,
-                                    RoundedCornerShape(50),
-                                ),
+                                .clip(CircleShape)
+                                .background(c.bgItem),
                         )
                         Column {
-                            Text(profile!!.second, fontWeight = FontWeight.SemiBold,
-                                fontSize = 15.sp, color = c.textPrimary)
+                            Text(
+                                profile!!.second,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 15.sp,
+                                color = c.textPrimary,
+                            )
                             Text("@${profile!!.first}", fontSize = 12.sp, color = c.textSecondary)
                         }
                     }
                 }
             }
 
-            // 主题设置
-            SectionLabel("外观")
-            SettingCard {
+            // 外观
+            SectionLabel("外观", c)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(c.bgCard, RoundedCornerShape(14.dp)),
+            ) {
                 val options = listOf(
                     ThemeMode.LIGHT  to "浅色模式",
                     ThemeMode.DARK   to "深色模式",
@@ -104,8 +113,7 @@ fun SettingsScreen(
                     ) {
                         Text(label, fontSize = 15.sp, color = c.textPrimary)
                         if (currentTheme == mode) {
-                            Icon(Icons.Default.Check, null,
-                                tint = Coral, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Default.Check, null, tint = Coral, modifier = Modifier.size(18.dp))
                         }
                     }
                     if (i < options.lastIndex) {
@@ -118,17 +126,20 @@ fun SettingsScreen(
                 }
             }
 
-            // 退出登录
-            SectionLabel("账号操作")
-            SettingCard {
+            // 账号操作
+            SectionLabel("账号操作", c)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(c.bgCard, RoundedCornerShape(14.dp)),
+            ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable { onLogout() }
                         .padding(16.dp),
                 ) {
-                    Text("退出登录", fontSize = 15.sp, color = RedColor,
-                        fontWeight = FontWeight.Medium)
+                    Text("退出登录", fontSize = 15.sp, color = RedColor, fontWeight = FontWeight.Medium)
                 }
             }
 
@@ -137,31 +148,23 @@ fun SettingsScreen(
             Text(
                 "GitMob · github.com/xiaobaiweinuli/GitMob-Android",
                 fontSize = 11.sp,
-                color = c.textPrimaryVariant,
-                modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 8.dp),
+                color = c.textTertiary,
+                modifier = Modifier
+                    .align(Alignment.CenterHorizontally)
+                    .padding(bottom = 8.dp),
             )
         }
     }
 }
 
 @Composable
-private fun SectionLabel(text: String) {
+private fun SectionLabel(text: String, c: GmColors) {
     Text(
         text = text.uppercase(),
         fontSize = 11.sp,
         fontWeight = FontWeight.SemiBold,
-        color = c.textPrimaryVariant,
+        color = c.textTertiary,
         letterSpacing = 0.8.sp,
         modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
-    )
-}
-
-@Composable
-private fun SettingCard(content: @Composable ColumnScope.() -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(c.bgCard, RoundedCornerShape(14.dp)),
-        content = content,
     )
 }

@@ -368,7 +368,7 @@ private fun DeleteRepoDialog(repoName: String, onConfirm: () -> Unit, onDismiss:
         title = { Text("删除仓库", color = c.textPrimary, fontWeight = FontWeight.SemiBold) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("此操作不可撤销。请输入仓库名 "$repoName" 确认删除：",
+                Text("此操作不可撤销。请输入仓库名 \"$repoName\" 确认删除：",
                     fontSize = 13.sp, color = c.textSecondary, lineHeight = 20.sp)
                 OutlinedTextField(
                     value = input, onValueChange = { input = it },

@@ -86,7 +86,7 @@ class RepoRepository {
         withContext(Dispatchers.IO) { api.getCommits(owner, repo, sha) }
 
     suspend fun getCommitDetail(owner: String, repo: String, sha: String): GHCommitFull =
-        withContext(Dispatchers.IO) { api.getCommit(owner, repo, sha) }
+        withContext(Dispatchers.IO) { api.getCommitFull(owner, repo, sha) }
 
     // ─── Branches ───
 
