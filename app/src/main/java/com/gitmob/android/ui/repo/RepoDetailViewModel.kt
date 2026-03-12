@@ -154,8 +154,12 @@ class RepoDetailViewModel(
                     modelClass: Class<T>,
                     extras: androidx.lifecycle.viewmodel.CreationExtras,
                 ): T {
-                    val app = extras[androidx.lifecycle.viewmodel.MutableCreationExtras.ApplicationKey]!!
-                    val handle = androidx.lifecycle.SavedStateHandle(mapOf("owner" to owner, "repo" to repo))
+                    val app = checkNotNull(
+                        extras[androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY]
+                    )
+                    val handle = androidx.lifecycle.SavedStateHandle(
+                        mapOf("owner" to owner, "repo" to repo)
+                    )
                     return RepoDetailViewModel(app, handle) as T
                 }
             }
