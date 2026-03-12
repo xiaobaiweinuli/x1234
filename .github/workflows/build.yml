@@ -23,6 +23,7 @@ on:
 
 env:
   JAVA_VERSION: "17"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 permissions:
   contents: write
@@ -62,9 +63,9 @@ jobs:
       # ── 4. 写入 GitHub OAuth Client ID ──
       - name: Inject build config
         run: |
-          sed -i 's/YOUR_GITHUB_CLIENT_ID/${{ secrets.GITHUB_CLIENT_ID_OAUTH }}/g' \
+          sed -i 's/YOUR_GITHUB_CLIENT_ID/${{ secrets.OAUTH_CLIENT_ID }}/g' \
             app/build.gradle.kts
-          sed -i 's/YOUR_SUBDOMAIN/${{ secrets.CF_SUBDOMAIN }}/g' \
+          sed -i 's/YOUR_SUBDOMAIN/${{ secrets.OAUTH_WORKER_SUBDOMAIN }}/g' \
             app/build.gradle.kts
 
       # ── 5. 权限 ──

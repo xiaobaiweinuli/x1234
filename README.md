@@ -1,8 +1,8 @@
 # GitMob — Kotlin Android GitHub Client | Mobile Git Manager
 
-**手机端 GitHub 原生管理工具，使用 GitHub OAuth 认证，支持仓库浏览、分支管理、文件查看、Issues/PR 等完整功能。**
+**手机端 GitHub 原生管理工具，OAuth 2.0 认证，支持仓库浏览、分支管理、文件查看、Issues/PR 等完整功能。**
 
-[![Build APK](https://github.com/YOUR_USERNAME/gitmob-android/actions/workflows/build.yml/badge.svg)](https://github.com/YOUR_USERNAME/gitmob-android/actions/workflows/build.yml)
+[![Build APK](https://github.com/xiaobaiweinuli/GitMob-Android/actions/workflows/build.yml/badge.svg)](https://github.com/xiaobaiweinuli/GitMob-Android/actions/workflows/build.yml)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.0-7F52FF?logo=kotlin)](https://kotlinlang.org)
 [![Compose](https://img.shields.io/badge/Jetpack_Compose-2024-4285F4?logo=android)](https://developer.android.com/jetpack/compose)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
@@ -11,41 +11,13 @@
 
 ## 功能特性
 
-- **GitHub OAuth 2.0 登录** — 通过 Cloudflare Worker 安全中转换取 token，client_secret 不暴露在客户端
-- **仓库列表** — 搜索、过滤（公开/私有）、星标数、语言标签、实时刷新
-- **仓库详情** — 文件树浏览、提交历史、分支管理、Pull Requests、Issues、Star/Unstar
-- **文件查看器** — 任意分支、任意路径的文件内容读取（Monospace 等宽渲染）
-- **新建仓库** — 在 App 内创建 GitHub 仓库，支持私有/公开、自动初始化 README
-- **分支操作** — 切换分支、从当前 HEAD 新建分支
-- **CI/CD** — GitHub Actions 自动构建签名 APK，推送 `v*.*.*` tag 自动发布 Release
-- **Material 3 深色主题** — 珊瑚橙主色调，适配 Android 边缘到边缘显示
-- **SplashScreen API** — 原生启动画面，无白屏闪烁
-
----
-
-## 项目结构
-
-```
-gitmob-android/
-├── app/src/main/java/com/gitmob/android/
-│   ├── auth/           # OAuth + DataStore token 持久化
-│   ├── api/            # Retrofit GitHub REST API v3
-│   ├── data/           # Repository 数据层
-│   └── ui/
-│       ├── theme/      # Material 3 颜色/字体/主题
-│       ├── nav/        # Compose Navigation 路由
-│       ├── login/      # OAuth 登录页
-│       ├── repos/      # 仓库列表
-│       ├── repo/       # 仓库详情（文件/提交/分支/PR/Issues）
-│       ├── create/     # 新建仓库
-│       └── common/     # 公共组件（GmCard/GmBadge/LoadingBox...）
-├── cf-worker/          # Cloudflare Worker — OAuth token 中转
-│   ├── src/index.ts
-│   └── wrangler.toml
-└── .github/workflows/
-    ├── build.yml       # 手动/tag 触发构建 + 签名 + Release
-    └── lint.yml        # PR 自动 Lint 检查
-```
+- **GitHub OAuth 2.0 登录** — Cloudflare Worker 安全中转，client_secret 不暴露在客户端
+- **仓库列表** — 搜索、过滤（公开/私有）、星标、语言标签
+- **仓库详情** — 文件树、提交历史、分支管理、PR、Issues、Star/Unstar
+- **文件查看器** — 任意分支路径，Monospace 等宽渲染
+- **新建仓库** — 支持私有/公开、自动初始化 README
+- **主题设置** — 默认浅色，支持深色/跟随系统切换
+- **CI/CD** — GitHub Actions 自动构建签名 APK，推送 tag 自动发布 Release
 
 ---
 
@@ -53,13 +25,15 @@ gitmob-android/
 
 ### 1. 创建 GitHub OAuth App
 
-前往 [GitHub → Settings → Developer settings → OAuth Apps → New OAuth App](https://github.com/settings/developers)
+前往 [GitHub → Settings → Developer settings → OAuth Apps](https://github.com/settings/developers)
 
 | 字段 | 值 |
 |------|----|
 | Application name | GitMob |
-| Homepage URL | `https://github.com/YOUR_USERNAME/gitmob-android` |
-| Authorization callback URL | `https://gitmob-oauth.YOUR_SUBDOMAIN.workers.dev/callback` |
+| **Homepage URL** | `https://gitmob.16618888.xyz` |
+| **Authorization callback URL** | `https://gitmob.16618888.xyz/callback` |
+
+> Homepage URL 填 Worker 自定义域名，作为 App 的公开落地页。
 
 记录 **Client ID** 和 **Client Secret**。
 
@@ -68,9 +42,8 @@ gitmob-android/
 ```bash
 cd cf-worker
 npm install
-npx wrangler login
 
-# 设置环境变量（Secret 不会出现在代码里）
+# 设置 Secret（不会出现在代码里）
 npx wrangler secret put GITHUB_CLIENT_ID
 npx wrangler secret put GITHUB_CLIENT_SECRET
 
@@ -78,29 +51,32 @@ npx wrangler secret put GITHUB_CLIENT_SECRET
 npm run deploy
 ```
 
-记录 Worker URL，格式：`https://gitmob-oauth.YOUR_SUBDOMAIN.workers.dev`
+在 Cloudflare Dashboard 将 `gitmob.16618888.xyz` 绑定为自定义域名。
 
-### 3. 配置 GitHub Actions Secrets
+### 3. GitHub Actions Secrets 配置
 
-在你的 GitHub 仓库 → Settings → Secrets → Actions 中添加：
+仓库 → Settings → Secrets → Actions，添加以下 Secret：
 
 | Secret 名 | 说明 |
 |-----------|------|
-| `GITHUB_CLIENT_ID_OAUTH` | OAuth App 的 Client ID |
-| `CF_SUBDOMAIN` | Worker 的 subdomain（`your-subdomain` 部分） |
-| `KEYSTORE_BASE64` | `base64 -w 0 your.keystore` 的输出 |
-| `KEYSTORE_PASSWORD` | keystore 密码 |
-| `KEY_ALIAS` | key alias |
-| `KEY_PASSWORD` | key 密码 |
+| `OAUTH_CLIENT_ID` | GitHub OAuth App 的 Client ID |
+| `OAUTH_WORKER_SUBDOMAIN` | Worker 子域（`bxiao` 部分） |
+| `KEYSTORE_BASE64` | `base64 -w 0 gitmob.jks` 输出内容 |
+| `KEYSTORE_PASSWORD` | Keystore 密码 |
+| `KEY_ALIAS` | Key alias |
+| `KEY_PASSWORD` | Key 密码 |
+
+> ⚠️ Secret 名不能以 `GITHUB_` 开头（GitHub 保留前缀）
 
 ### 4. 本地开发
 
-```bash
-# 修改 app/build.gradle.kts，填入你的真实值
+修改 `app/build.gradle.kts`：
+```kotlin
 buildConfigField("String", "GITHUB_CLIENT_ID", "\"your_client_id\"")
-buildConfigField("String", "OAUTH_REDIRECT_URI", "\"https://gitmob-oauth.xxx.workers.dev/callback\"")
+buildConfigField("String", "OAUTH_REDIRECT_URI", "\"https://gitmob.16618888.xyz/callback\"")
+```
 
-# 构建运行
+```bash
 ./gradlew assembleDebug
 ./gradlew installDebug
 ```
@@ -114,14 +90,14 @@ keytool -genkey -v \
   -validity 10000 \
   -alias gitmob
 
-# 编码为 base64 供 GitHub Actions 使用
+# 转 base64 供 Actions 使用
 base64 -w 0 gitmob-release.jks
 ```
 
 ### 6. 触发构建
 
-- **手动**：Actions → Build & Release APK → Run workflow → 选择 release/debug
-- **自动**：推送 tag `v1.0.0` 触发 Release 构建并自动创建 GitHub Release
+- **手动**：Actions → Build & Release APK → Run workflow
+- **自动**：推送 tag `v1.0.0` 触发签名 APK + GitHub Release
 
 ---
 
@@ -129,36 +105,36 @@ base64 -w 0 gitmob-release.jks
 
 ```
 Android App
-    │  打开 Custom Tab
+    │  Custom Tab 打开
     ▼
-github.com/oauth/authorize
-    │  用户授权后跳转
+https://gitmob.16618888.xyz/auth
+    │  重定向到 GitHub
     ▼
-Cloudflare Worker /callback
+github.com/oauth/authorize（用户授权）
+    │  回调
+    ▼
+https://gitmob.16618888.xyz/callback
     │  code → access_token（保护 client_secret）
     ▼
-gitmob://oauth?token=xxx  ← Android Deep Link
-    │  App 接收 token
+gitmob://oauth?token=xxx  ← Android 深链接
+    │  App 接收并存储
     ▼
-DataStore 持久化 → API 请求携带 Bearer token
+DataStore 持久化 → API Bearer token
 ```
+
+---
+
+## Worker 路由
+
+| 路径 | 功能 |
+|------|------|
+| `GET /` | App 落地页（下载链接、功能介绍） |
+| `GET /auth` | 跳转 GitHub OAuth 授权 |
+| `GET /callback` | 接收 code，换 token，重定向 App |
+| `GET /health` | 健康检查 |
 
 ---
 
 ## 技术栈
 
-| 技术 | 版本 |
-|------|------|
-| Kotlin | 2.0 |
-| Jetpack Compose | BOM 2024.08 |
-| Material 3 | latest |
-| Navigation Compose | 2.7.7 |
-| Retrofit + OkHttp | 2.11 / 4.12 |
-| DataStore Preferences | 1.1.1 |
-| Coil | 2.7 |
-| SplashScreen API | 1.0.1 |
-| Cloudflare Workers | TypeScript |
-
----
-
-GitMob is a Kotlin Jetpack Compose Android app for GitHub repository management with OAuth 2.0 authentication via Cloudflare Workers, featuring repo browsing, branch management, file viewer, PR/Issues tracking, and automated APK builds via GitHub Actions.
+Kotlin 2.0 · Jetpack Compose BOM 2024.08 · Material 3 · Navigation Compose · Retrofit + OkHttp · DataStore · Coil · SplashScreen API · Cloudflare Workers TypeScript

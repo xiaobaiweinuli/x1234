@@ -12,8 +12,10 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.*
 import androidx.navigation.compose.*
+import com.gitmob.android.auth.ThemeMode
 import com.gitmob.android.auth.TokenStorage
 import com.gitmob.android.data.RepoRepository
 import com.gitmob.android.ui.common.ErrorBox
@@ -21,6 +23,7 @@ import com.gitmob.android.ui.common.LoadingBox
 import com.gitmob.android.ui.create.CreateRepoScreen
 import com.gitmob.android.ui.login.LoginScreen
 import com.gitmob.android.ui.repo.RepoDetailScreen
+import com.gitmob.android.ui.repo.RepoDetailViewModel
 import com.gitmob.android.ui.repos.RepoListScreen
 import com.gitmob.android.ui.settings.SettingsScreen
 import com.gitmob.android.ui.theme.BgDeep
@@ -34,10 +37,10 @@ sealed class Route(val path: String) {
     object Login      : Route("login")
     object RepoList   : Route("repos")
     object CreateRepo : Route("create_repo")
+    object Settings   : Route("settings")
     object RepoDetail : Route("repo/{owner}/{repo}") {
         fun go(owner: String, repo: String) = "repo/$owner/$repo"
     }
-    object Settings : Route("settings")
     object FileViewer : Route("file/{owner}/{repo}/{branch}?path={path}") {
         fun go(owner: String, repo: String, path: String, branch: String) =
             "file/$owner/$repo/$branch?path=${URLEncoder.encode(path, "UTF-8")}"
@@ -48,10 +51,11 @@ sealed class Route(val path: String) {
 fun AppNavGraph(
     tokenStorage: TokenStorage,
     initialToken: String?,
-    onThemeChange: (com.gitmob.android.data.ThemeMode) -> Unit = {},
+    onThemeChange: (ThemeMode) -> Unit,
 ) {
     val navController = rememberNavController()
     var startDest by remember { mutableStateOf<String?>(null) }
+    val currentTheme by tokenStorage.themeMode.collectAsState(initial = ThemeMode.LIGHT)
 
     LaunchedEffect(Unit) {
         val token = tokenStorage.accessToken.first()
@@ -75,10 +79,8 @@ fun AppNavGraph(
 
         composable(Route.RepoList.path) {
             RepoListScreen(
-                onRepoClick = { owner, repo ->
-                    navController.navigate(Route.RepoDetail.go(owner, repo))
-                },
-                onCreateRepo = { navController.navigate(Route.CreateRepo.path) },
+                onRepoClick   = { owner, repo -> navController.navigate(Route.RepoDetail.go(owner, repo)) },
+                onCreateRepo  = { navController.navigate(Route.CreateRepo.path) },
                 onProfileClick = { navController.navigate(Route.Settings.path) },
             )
         }
@@ -93,18 +95,19 @@ fun AppNavGraph(
             val owner = back.arguments?.getString("owner") ?: ""
             val repo  = back.arguments?.getString("repo")  ?: ""
             RepoDetailScreen(
-                owner = owner,
+                owner    = owner,
                 repoName = repo,
-                onBack = { navController.popBackStack() },
+                onBack   = { navController.popBackStack() },
                 onFileClick = { o, r, path, branch ->
                     navController.navigate(Route.FileViewer.go(o, r, path, branch))
                 },
+                vm = viewModel(factory = RepoDetailViewModel.factory(owner, repo)),
             )
         }
 
         composable(Route.CreateRepo.path) {
             CreateRepoScreen(
-                onBack = { navController.popBackStack() },
+                onBack    = { navController.popBackStack() },
                 onCreated = { owner, repo ->
                     navController.navigate(Route.RepoDetail.go(owner, repo)) {
                         popUpTo(Route.CreateRepo.path) { inclusive = true }
@@ -115,8 +118,11 @@ fun AppNavGraph(
 
         composable(Route.Settings.path) {
             SettingsScreen(
-                onBack = { navController.popBackStack() },
-                onLogout = {
+                tokenStorage  = tokenStorage,
+                currentTheme  = currentTheme,
+                onThemeChange = onThemeChange,
+                onBack        = { navController.popBackStack() },
+                onLogout      = {
                     navController.navigate(Route.Login.path) {
                         popUpTo(0) { inclusive = true }
                     }
@@ -137,13 +143,8 @@ fun AppNavGraph(
             val repo   = back.arguments?.getString("repo")   ?: ""
             val branch = back.arguments?.getString("branch") ?: ""
             val path   = URLDecoder.decode(back.arguments?.getString("path") ?: "", "UTF-8")
-            FileViewerScreen(
-                owner  = owner,
-                repo   = repo,
-                path   = path,
-                ref    = branch,
-                onBack = { navController.popBackStack() },
-            )
+            FileViewerScreen(owner = owner, repo = repo, path = path, ref = branch,
+                onBack = { navController.popBackStack() })
         }
     }
 }
@@ -151,11 +152,7 @@ fun AppNavGraph(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FileViewerScreen(
-    owner: String,
-    repo: String,
-    path: String,
-    ref: String,
-    onBack: () -> Unit,
+    owner: String, repo: String, path: String, ref: String, onBack: () -> Unit,
 ) {
     val repository = remember { RepoRepository() }
     var content by remember { mutableStateOf("") }
@@ -164,52 +161,40 @@ fun FileViewerScreen(
 
     LaunchedEffect(path) {
         loading = true
-        try {
-            content = repository.getFileContent(owner, repo, path, ref)
-            error = null
-        } catch (e: Exception) {
-            error = e.message
-        } finally {
-            loading = false
-        }
+        try { content = repository.getFileContent(owner, repo, path, ref); error = null }
+        catch (e: Exception) { error = e.message }
+        finally { loading = false }
     }
 
     Scaffold(
-        containerColor = BgDeep,
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        text = path.substringAfterLast("/"),
-                        fontWeight = FontWeight.Medium,
-                        fontSize = 15.sp,
-                        color = TextPrimary,
-                    )
+                    Text(path.substringAfterLast("/"), fontWeight = FontWeight.Medium,
+                        fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurface)
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = TextSecondary)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = BgDeep),
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background),
             )
         },
     ) { padding ->
         when {
-            loading      -> LoadingBox(Modifier.padding(padding))
+            loading       -> LoadingBox(Modifier.padding(padding))
             error != null -> ErrorBox(error!!) {}
             else -> LazyColumn(
                 contentPadding = PaddingValues(16.dp),
                 modifier = Modifier.padding(padding),
             ) {
                 item {
-                    Text(
-                        text = content,
-                        fontSize = 12.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = TextPrimary,
-                        lineHeight = 18.sp,
-                    )
+                    Text(content, fontSize = 12.sp, fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurface, lineHeight = 18.sp)
                 }
             }
         }

@@ -9,19 +9,35 @@ import kotlinx.coroutines.flow.map
 
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "gitmob_prefs")
 
+/** 主题模式：0=浅色(默认) 1=深色 2=跟随系统 */
+enum class ThemeMode(val value: Int) {
+    LIGHT(0), DARK(1), SYSTEM(2);
+    companion object {
+        fun fromInt(v: Int) = entries.firstOrNull { it.value == v } ?: LIGHT
+    }
+}
+
 class TokenStorage(private val context: Context) {
+
     private object Keys {
         val ACCESS_TOKEN = stringPreferencesKey("access_token")
         val USER_LOGIN   = stringPreferencesKey("user_login")
         val USER_NAME    = stringPreferencesKey("user_name")
         val AVATAR_URL   = stringPreferencesKey("avatar_url")
+        val THEME_MODE   = intPreferencesKey("theme_mode")
     }
 
     val accessToken: Flow<String?> = context.dataStore.data.map { it[Keys.ACCESS_TOKEN] }
-    val userLogin: Flow<String?> = context.dataStore.data.map { it[Keys.USER_LOGIN] }
+    val userLogin:   Flow<String?> = context.dataStore.data.map { it[Keys.USER_LOGIN] }
+
     val userProfile: Flow<Triple<String, String, String>?> = context.dataStore.data.map { prefs ->
-        val login  = prefs[Keys.USER_LOGIN] ?: return@map null
+        val login = prefs[Keys.USER_LOGIN] ?: return@map null
         Triple(login, prefs[Keys.USER_NAME] ?: login, prefs[Keys.AVATAR_URL] ?: "")
+    }
+
+    /** 默认浅色（LIGHT=0） */
+    val themeMode: Flow<ThemeMode> = context.dataStore.data.map {
+        ThemeMode.fromInt(it[Keys.THEME_MODE] ?: ThemeMode.LIGHT.value)
     }
 
     suspend fun saveToken(token: String) {
@@ -33,6 +49,9 @@ class TokenStorage(private val context: Context) {
             prefs[Keys.USER_NAME]  = name ?: login
             prefs[Keys.AVATAR_URL] = avatarUrl ?: ""
         }
+    }
+    suspend fun setThemeMode(mode: ThemeMode) {
+        context.dataStore.edit { it[Keys.THEME_MODE] = mode.value }
     }
     suspend fun clear() { context.dataStore.edit { it.clear() } }
 }
