@@ -33,7 +33,7 @@ jobs:
       - name: Stub secrets for lint
         run: |
           sed -i 's/YOUR_GITHUB_CLIENT_ID/stub_client_id/g' app/build.gradle.kts
-          sed -i 's/YOUR_SUBDOMAIN/stub/g' app/build.gradle.kts
+          sed -i 's|YOUR_OAUTH_CALLBACK_URL|https://stub.example.com/callback|g' app/build.gradle.kts
       - name: Run Lint
         run: ./gradlew lintDebug --no-daemon
       - name: Upload Lint Report

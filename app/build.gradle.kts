@@ -15,7 +15,7 @@ android {
         versionCode = 1
         versionName = "1.0.0"
         buildConfigField("String", "GITHUB_CLIENT_ID", "\"YOUR_GITHUB_CLIENT_ID\"")
-        buildConfigField("String", "OAUTH_REDIRECT_URI", "\"https://gitmob-oauth.YOUR_SUBDOMAIN.workers.dev/callback\"")
+        buildConfigField("String", "OAUTH_REDIRECT_URI", "\"YOUR_OAUTH_CALLBACK_URL\"")
         manifestPlaceholders["appScheme"] = "gitmob"
         manifestPlaceholders["appHost"] = "oauth"
     }

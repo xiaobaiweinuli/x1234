@@ -67,6 +67,10 @@ npm run deploy
 | `KEY_PASSWORD` | Key 密码 |
 
 > ⚠️ Secret 名不能以 `GITHUB_` 开头（GitHub 保留前缀）
+>
+> `OAUTH_CALLBACK_URL` 填完整基础 URL，不含 `/callback`，例如：
+> - 自定义域名：`https://gitmob.16618888.xyz`
+> - Workers 默认域：`https://gitmob-oauth.bxiao.workers.dev`
 
 ### 4. 本地开发
 
@@ -138,3 +142,7 @@ DataStore 持久化 → API Bearer token
 ## 技术栈
 
 Kotlin 2.0 · Jetpack Compose BOM 2024.08 · Material 3 · Navigation Compose · Retrofit + OkHttp · DataStore · Coil · SplashScreen API · Cloudflare Workers TypeScript
+
+---
+
+GitMob is a Kotlin Jetpack Compose Android GitHub client with OAuth 2.0 via Cloudflare Workers, featuring repo management, branch operations, file viewer, PR/Issues tracking, theme switching, and automated APK builds via GitHub Actions.
