@@ -1,0 +1,136 @@
+name: Build & Release APK
+
+on:
+  # 手动触发，可选择版本号
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: "版本号 (如 1.2.0)"
+        required: false
+        default: ""
+      release_type:
+        description: "发布类型"
+        required: true
+        default: "debug"
+        type: choice
+        options:
+          - debug
+          - release
+  # 推送 tag 自动触发 release 构建
+  push:
+    tags:
+      - "v*.*.*"
+
+env:
+  JAVA_VERSION: "17"
+  GRADLE_CACHE_KEY: gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', '**/libs.versions.toml') }}
+
+jobs:
+  build:
+    name: Build APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # ── 1. Checkout ──
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ── 2. Java ──
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: "temurin"
+          cache: gradle
+
+      # ── 3. Gradle 缓存 ──
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ env.GRADLE_CACHE_KEY }}
+          restore-keys: gradle-
+
+      # ── 4. 写入 GitHub OAuth Client ID ──
+      - name: Inject build config
+        run: |
+          sed -i 's/YOUR_GITHUB_CLIENT_ID/${{ secrets.GITHUB_CLIENT_ID_OAUTH }}/g' \
+            app/build.gradle.kts
+          sed -i 's/YOUR_SUBDOMAIN/${{ secrets.CF_SUBDOMAIN }}/g' \
+            app/build.gradle.kts
+
+      # ── 5. 权限 ──
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      # ── 6a. Debug 构建 ──
+      - name: Build Debug APK
+        if: ${{ github.event.inputs.release_type == 'debug' || !startsWith(github.ref, 'refs/tags/') }}
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      # ── 6b. Release 构建（需要签名） ──
+      - name: Decode Keystore
+        if: ${{ github.event.inputs.release_type == 'release' || startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > /tmp/gitmob.keystore
+
+      - name: Build Release APK
+        if: ${{ github.event.inputs.release_type == 'release' || startsWith(github.ref, 'refs/tags/') }}
+        env:
+          KEYSTORE_PATH: /tmp/gitmob.keystore
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
+
+      # ── 7. 计算版本号 ──
+      - name: Get version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version_name }}" ]; then
+            echo "name=${{ github.event.inputs.version_name }}" >> $GITHUB_OUTPUT
+          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "name=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          else
+            echo "name=debug-$(date +%Y%m%d-%H%M)" >> $GITHUB_OUTPUT
+          fi
+
+      # ── 8. 上传 Artifact ──
+      - name: Upload Debug APK
+        if: ${{ github.event.inputs.release_type == 'debug' || !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: GitMob-debug-${{ steps.version.outputs.name }}
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 14
+
+      - name: Upload Release APK
+        if: ${{ github.event.inputs.release_type == 'release' || startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: GitMob-release-${{ steps.version.outputs.name }}
+          path: app/build/outputs/apk/release/*.apk
+          retention-days: 90
+
+      # ── 9. 自动发布 GitHub Release（仅 tag 触发） ──
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: GitMob v${{ steps.version.outputs.name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: app/build/outputs/apk/release/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 10. 清理 keystore ──
+      - name: Clean keystore
+        if: always()
+        run: rm -f /tmp/gitmob.keystore

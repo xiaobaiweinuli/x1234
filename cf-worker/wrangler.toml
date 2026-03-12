@@ -1,0 +1,14 @@
+name = "gitmob-oauth"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+# 环境变量在 CF Dashboard > Workers > gitmob-oauth > Settings > Variables 中设置
+# GITHUB_CLIENT_ID      → 明文
+# GITHUB_CLIENT_SECRET  → 加密（Secret）
+
+[env.production]
+name = "gitmob-oauth"
+
+[env.staging]
+name = "gitmob-oauth-staging"
