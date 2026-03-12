@@ -145,4 +145,19 @@ class RepoDetailViewModel(
             } catch (_: Exception) {}
         }
     }
+
+    companion object {
+        fun factory(owner: String, repo: String): androidx.lifecycle.ViewModelProvider.Factory =
+            object : androidx.lifecycle.ViewModelProvider.Factory {
+                @Suppress("UNCHECKED_CAST")
+                override fun <T : androidx.lifecycle.ViewModel> create(
+                    modelClass: Class<T>,
+                    extras: androidx.lifecycle.viewmodel.CreationExtras,
+                ): T {
+                    val app = extras[androidx.lifecycle.viewmodel.MutableCreationExtras.ApplicationKey]!!
+                    val handle = androidx.lifecycle.SavedStateHandle(mapOf("owner" to owner, "repo" to repo))
+                    return RepoDetailViewModel(app, handle) as T
+                }
+            }
+    }
 }

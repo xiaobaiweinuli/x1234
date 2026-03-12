@@ -8,7 +8,20 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.filled.AccountTree
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Circle
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -31,7 +44,9 @@ fun RepoDetailScreen(
     repoName: String,
     onBack: () -> Unit,
     onFileClick: (String, String, String, String) -> Unit, // owner,repo,path,ref
-    vm: RepoDetailViewModel = viewModel(),
+    vm: RepoDetailViewModel = viewModel(
+        factory = RepoDetailViewModel.factory(owner, repoName),
+    ),
 ) {
     val state by vm.state.collectAsState()
     val tabs = listOf("文件", "提交", "分支", "PR", "Issues")
@@ -90,7 +105,7 @@ fun RepoDetailScreen(
                 containerColor = BgDeep,
                 contentColor = Coral,
                 edgePadding = 16.dp,
-                divider = { HorizontalDivider() },
+                divider = { GmDivider() },
             ) {
                 tabs.forEachIndexed { i, label ->
                     Tab(

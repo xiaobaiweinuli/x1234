@@ -1,25 +1,44 @@
 package com.gitmob.android.ui.nav
 
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.navigation.*
 import androidx.navigation.compose.*
 import com.gitmob.android.auth.TokenStorage
+import com.gitmob.android.data.RepoRepository
+import com.gitmob.android.ui.common.ErrorBox
+import com.gitmob.android.ui.common.LoadingBox
 import com.gitmob.android.ui.create.CreateRepoScreen
 import com.gitmob.android.ui.login.LoginScreen
 import com.gitmob.android.ui.repo.RepoDetailScreen
 import com.gitmob.android.ui.repos.RepoListScreen
+import com.gitmob.android.ui.theme.BgDeep
+import com.gitmob.android.ui.theme.TextPrimary
+import com.gitmob.android.ui.theme.TextSecondary
 import kotlinx.coroutines.flow.first
+import java.net.URLDecoder
+import java.net.URLEncoder
 
 sealed class Route(val path: String) {
-    object Login : Route("login")
-    object RepoList : Route("repos")
+    object Login      : Route("login")
+    object RepoList   : Route("repos")
+    object CreateRepo : Route("create_repo")
     object RepoDetail : Route("repo/{owner}/{repo}") {
         fun go(owner: String, repo: String) = "repo/$owner/$repo"
     }
-    object CreateRepo : Route("create_repo")
     object FileViewer : Route("file/{owner}/{repo}/{branch}?path={path}") {
         fun go(owner: String, repo: String, path: String, branch: String) =
-            "file/$owner/$repo/$branch?path=${java.net.URLEncoder.encode(path, "UTF-8")}"
+            "file/$owner/$repo/$branch?path=${URLEncoder.encode(path, "UTF-8")}"
     }
 }
 
@@ -57,9 +76,7 @@ fun AppNavGraph(
                     navController.navigate(Route.RepoDetail.go(owner, repo))
                 },
                 onCreateRepo = { navController.navigate(Route.CreateRepo.path) },
-                onProfileClick = {
-                    // 长期可加 Profile 页
-                },
+                onProfileClick = {},
             )
         }
 
@@ -67,11 +84,11 @@ fun AppNavGraph(
             route = Route.RepoDetail.path,
             arguments = listOf(
                 navArgument("owner") { type = NavType.StringType },
-                navArgument("repo") { type = NavType.StringType },
-            )
+                navArgument("repo")  { type = NavType.StringType },
+            ),
         ) { back ->
             val owner = back.arguments?.getString("owner") ?: ""
-            val repo  = back.arguments?.getString("repo") ?: ""
+            val repo  = back.arguments?.getString("repo")  ?: ""
             RepoDetailScreen(
                 owner = owner,
                 repoName = repo,
@@ -100,26 +117,36 @@ fun AppNavGraph(
                 navArgument("repo")   { type = NavType.StringType },
                 navArgument("branch") { type = NavType.StringType },
                 navArgument("path")   { type = NavType.StringType; defaultValue = "" },
-            )
+            ),
         ) { back ->
-            val owner  = back.arguments?.getString("owner") ?: ""
-            val repo   = back.arguments?.getString("repo") ?: ""
+            val owner  = back.arguments?.getString("owner")  ?: ""
+            val repo   = back.arguments?.getString("repo")   ?: ""
             val branch = back.arguments?.getString("branch") ?: ""
-            val path   = java.net.URLDecoder.decode(back.arguments?.getString("path") ?: "", "UTF-8")
+            val path   = URLDecoder.decode(back.arguments?.getString("path") ?: "", "UTF-8")
             FileViewerScreen(
-                owner = owner, repo = repo, path = path, ref = branch,
+                owner  = owner,
+                repo   = repo,
+                path   = path,
+                ref    = branch,
                 onBack = { navController.popBackStack() },
             )
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FileViewerScreen(owner: String, repo: String, path: String, ref: String, onBack: () -> Unit) {
-    val repository = remember { com.gitmob.android.data.RepoRepository() }
+fun FileViewerScreen(
+    owner: String,
+    repo: String,
+    path: String,
+    ref: String,
+    onBack: () -> Unit,
+) {
+    val repository = remember { RepoRepository() }
     var content by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(true) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var error   by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(path) {
         loading = true
@@ -133,54 +160,44 @@ fun FileViewerScreen(owner: String, repo: String, path: String, ref: String, onB
         }
     }
 
-    androidx.compose.material3.Scaffold(
-        containerColor = com.gitmob.android.ui.theme.BgDeep,
+    Scaffold(
+        containerColor = BgDeep,
         topBar = {
-            androidx.compose.material3.TopAppBar(
+            TopAppBar(
                 title = {
-                    androidx.compose.material3.Text(
-                        path.substringAfterLast("/"),
-                        fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
+                    Text(
+                        text = path.substringAfterLast("/"),
+                        fontWeight = FontWeight.Medium,
                         fontSize = 15.sp,
-                        color = com.gitmob.android.ui.theme.TextPrimary,
+                        color = TextPrimary,
                     )
                 },
                 navigationIcon = {
-                    androidx.compose.material3.IconButton(onClick = onBack) {
-                        androidx.compose.material3.Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack, null,
-                            tint = com.gitmob.android.ui.theme.TextSecondary
-                        )
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = TextSecondary)
                     }
                 },
-                colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
-                    containerColor = com.gitmob.android.ui.theme.BgDeep
-                ),
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = BgDeep),
             )
         },
     ) { padding ->
         when {
-            loading -> com.gitmob.android.ui.common.LoadingBox(Modifier.padding(padding))
-            error != null -> com.gitmob.android.ui.common.ErrorBox(error!!) { }
-            else -> {
-                androidx.compose.foundation.lazy.LazyColumn(
-                    contentPadding = PaddingValues(16.dp),
-                    modifier = Modifier.padding(padding),
-                ) {
-                    item {
-                        androidx.compose.material3.Text(
-                            text = content,
-                            fontSize = 12.sp,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                            color = com.gitmob.android.ui.theme.TextPrimary,
-                            lineHeight = 18.sp,
-                        )
-                    }
+            loading      -> LoadingBox(Modifier.padding(padding))
+            error != null -> ErrorBox(error!!) {}
+            else -> LazyColumn(
+                contentPadding = PaddingValues(16.dp),
+                modifier = Modifier.padding(padding),
+            ) {
+                item {
+                    Text(
+                        text = content,
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = TextPrimary,
+                        lineHeight = 18.sp,
+                    )
                 }
             }
         }
     }
 }
-
-private val Icons.AutoMirrored.Filled.ArrowBack get() =
-    androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack

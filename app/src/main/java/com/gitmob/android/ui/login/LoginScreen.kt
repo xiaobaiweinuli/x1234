@@ -21,6 +21,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.gitmob.android.auth.OAuthManager
 import com.gitmob.android.ui.theme.*
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LoginScreen(
     pendingToken: String?,

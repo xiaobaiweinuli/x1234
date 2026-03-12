@@ -46,8 +46,10 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        }
     }
     buildFeatures {
         compose = true
@@ -71,6 +73,7 @@ dependencies {
     implementation(libs.androidx.browser)
     implementation(libs.androidx.splashscreen)
     implementation(libs.material)
+    implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.retrofit)
     implementation(libs.retrofit.converter.gson)
     implementation(libs.okhttp.logging)

@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.gitmob.android.ui.theme.*
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GmTopBar(
     title: String,
@@ -161,8 +162,8 @@ fun EmptyBox(text: String) {
 }
 
 @Composable
-fun HorizontalDivider() {
-    Divider(color = Border, thickness = 0.5.dp)
+fun GmDivider() {
+    HorizontalDivider(color = Border, thickness = 0.5.dp)
 }
 
 @Composable
