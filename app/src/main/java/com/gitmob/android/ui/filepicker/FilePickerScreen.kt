@@ -106,8 +106,9 @@ private suspend fun listViaRoot(path: String): List<FileEntry> {
 }
 
 /** 普通权限列目录 */
-private fun listNormal(path: String): List<FileEntry> =
-    (File(path).listFiles() ?: return emptyList())
+private fun listNormal(path: String): List<FileEntry> {
+    val files = File(path).listFiles() ?: return emptyList()
+    return files
         .sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
         .map { f ->
             FileEntry(
@@ -117,6 +118,7 @@ private fun listNormal(path: String): List<FileEntry> =
                 size = if (!f.isDirectory) f.length() else 0L,
             )
         }
+}
 
 // ─── 主 Composable ────────────────────────────────────────────────────────────
 

@@ -132,9 +132,9 @@ class LocalRepoViewModel(app: Application) : AndroidViewModel(app) {
                 emit("→ 设置远程地址...")
                 val existingRemote = GitRunner.remoteUrl(repo.path)
                 if (existingRemote != null) {
-                    GitRunner.setRemote(repo.path, remoteUrl)
+                    GitRunner.run(repo.path, "remote", "set-url", "origin", remoteUrl)
                 } else {
-                    GitRunner.addRemote(repo.path, remoteUrl)
+                    GitRunner.run(repo.path, "remote", "add", "origin", remoteUrl)
                 }
                 emit("✓ remote: $remoteUrl")
 
