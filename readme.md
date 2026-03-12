@@ -1,3 +1,0 @@
-现在基本上正常了，可以考虑直接给我编写一个APP项目了
-整体项目我会放到GitHub仓库，使用action自动或者手动触发构建APP，使用Kotlin，直接做成GitHub APP
-如果可以，那就使用GitHub的outah认证获取相关的所有需要的权限
