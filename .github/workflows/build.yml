@@ -23,7 +23,6 @@ on:
 
 env:
   JAVA_VERSION: "17"
-  GRADLE_CACHE_KEY: gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', '**/libs.versions.toml') }}
 
 jobs:
   build:
@@ -53,7 +52,7 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ env.GRADLE_CACHE_KEY }}
+          key: gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', '**/libs.versions.toml') }}
           restore-keys: gradle-
 
       # ── 4. 写入 GitHub OAuth Client ID ──

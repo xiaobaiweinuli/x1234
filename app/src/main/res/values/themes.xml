@@ -1,13 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Splash screen 主题：仅用于启动画面 -->
     <style name="Theme.GitMob" parent="Theme.SplashScreen">
         <item name="windowSplashScreenBackground">#0F1117</item>
         <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash</item>
         <item name="postSplashScreenTheme">@style/Theme.GitMob.Base</item>
     </style>
-    <style name="Theme.GitMob.Base" parent="Theme.Material3.Dark.NoActionBar">
+
+    <!--
+        Compose 项目的 Activity 主题：不需要 Material3 XML 主题
+        用 android:Theme.Material.NoActionBar（API 21+ 内置，无需额外依赖）
+    -->
+    <style name="Theme.GitMob.Base" parent="android:Theme.Material.NoActionBar">
         <item name="android:statusBarColor">#0F1117</item>
         <item name="android:navigationBarColor">#0F1117</item>
         <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+        <item name="android:windowBackground">#0F1117</item>
     </style>
 </resources>

@@ -1,5 +1,5 @@
 [versions]
-agp = "8.4.2"
+agp = "8.7.0"
 kotlin = "2.0.0"
 coreKtx = "1.13.1"
 lifecycle = "2.8.4"
@@ -14,6 +14,7 @@ browser = "1.8.0"
 coil = "2.7.0"
 coroutines = "1.8.1"
 splashscreen = "1.0.1"
+material = "1.12.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -36,6 +37,7 @@ retrofit-converter-gson = { group = "com.squareup.retrofit2", name = "converter-
 okhttp-logging = { group = "com.squareup.okhttp3", name = "logging-interceptor", version.ref = "okhttp" }
 gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
+material = { group = "com.google.android.material", name = "material", version.ref = "material" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 
 [plugins]
