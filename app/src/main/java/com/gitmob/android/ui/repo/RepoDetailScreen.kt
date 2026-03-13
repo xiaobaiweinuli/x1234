@@ -42,6 +42,9 @@ import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -82,7 +85,7 @@ fun RepoDetailScreen(
                             null, tint = if (state.isStarred) Yellow else c.textSecondary,
                         )
                     }
-                    IconButton(onClick = vm::loadAll) { Icon(Icons.Default.Refresh, null, tint = c.textSecondary) }
+                    IconButton(onClick = { vm.loadAll(forceRefresh = true) }) { Icon(Icons.Default.Refresh, null, tint = c.textSecondary) }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = c.bgDeep),
             )
@@ -157,9 +160,12 @@ fun RepoDetailScreen(
             }
 
             when (state.tab) {
-                0 -> FilesTab(state, c, onDirClick = { vm.loadContents(it) },
+                0 -> FilesTab(state, c,
+                    onDirClick = { vm.loadContents(it) },
                     onFileClick = { path -> onFileClick(owner, repoName, path, state.currentBranch) },
-                    onNavigateUp = vm::navigateUp)
+                    onNavigateUp = vm::navigateUp,
+                    onRefresh = { vm.loadContents(state.currentPath, forceRefresh = true) },
+                )
                 1 -> CommitsTab(state, c, onCommitClick = { vm.loadCommitDetail(it.sha) })
                 2 -> BranchesTab(state, c, onSwitch = vm::switchBranch,
                     onNewBranch = { showNewBranchDialog = true },
@@ -201,41 +207,81 @@ private fun StatItem(icon: ImageVector, text: String, tint: Color) {
 // ─── Tabs ────────────────────────────────────────────────────────
 
 @Composable
-fun FilesTab(state: RepoDetailState, c: GmColors, onDirClick: (String) -> Unit, onFileClick: (String) -> Unit, onNavigateUp: () -> Unit) {
-    LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-        if (state.currentPath.isNotEmpty()) {
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth().background(c.bgCard, RoundedCornerShape(8.dp))
-                        .clickable(onClick = onNavigateUp).padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = c.textTertiary, modifier = Modifier.size(17.dp))
-                    Text("..", fontSize = 13.sp, color = c.textTertiary)
-                    Spacer(Modifier.weight(1f))
-                    Text(state.currentPath, fontSize = 11.sp, color = c.textTertiary, fontFamily = FontFamily.Monospace)
+@OptIn(ExperimentalMaterial3Api::class)
+fun FilesTab(
+    state: RepoDetailState,
+    c: GmColors,
+    onDirClick: (String) -> Unit,
+    onFileClick: (String) -> Unit,
+    onNavigateUp: () -> Unit,
+    onRefresh: () -> Unit = {},
+) {
+    var isRefreshing by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    androidx.compose.material3.pulltorefresh.PullToRefreshBox(
+        isRefreshing = isRefreshing,
+        onRefresh = {
+            isRefreshing = true
+            onRefresh()
+            scope.launch {
+                kotlinx.coroutines.delay(800)
+                isRefreshing = false
+            }
+        },
+    ) {
+        LazyColumn(
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(1.dp),
+        ) {
+            if (state.currentPath.isNotEmpty()) {
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth()
+                            .background(c.bgCard, RoundedCornerShape(8.dp))
+                            .clickable(onClick = onNavigateUp)
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null,
+                            tint = c.textTertiary, modifier = Modifier.size(17.dp))
+                        Text("..", fontSize = 13.sp, color = c.textTertiary)
+                        Spacer(Modifier.weight(1f))
+                        Text(state.currentPath, fontSize = 11.sp,
+                            color = c.textTertiary, fontFamily = FontFamily.Monospace)
+                    }
                 }
             }
-        }
-        if (state.contentsLoading) {
-            item { Box(Modifier.fillMaxWidth().height(80.dp), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = Coral, modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-            }}
-        } else {
-            items(state.contents, key = { it.path }) { content ->
-                val isDir = content.type == "dir"
-                Row(
-                    modifier = Modifier.fillMaxWidth().background(c.bgCard, RoundedCornerShape(8.dp))
-                        .clickable { if (isDir) onDirClick(content.path) else onFileClick(content.path) }
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Icon(if (isDir) Icons.Default.Folder else Icons.Default.Description,
-                        null, tint = if (isDir) Yellow else c.textSecondary, modifier = Modifier.size(17.dp))
-                    Text(content.name, fontSize = 13.sp, color = c.textPrimary, modifier = Modifier.weight(1f))
-                    if (!isDir) Text(formatSize(content.size), fontSize = 11.sp, color = c.textTertiary)
-                    if (isDir) Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = c.textTertiary, modifier = Modifier.size(14.dp))
+            if (state.contentsLoading) {
+                item {
+                    Box(Modifier.fillMaxWidth().height(80.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = Coral, modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                    }
+                }
+            } else {
+                items(state.contents, key = { it.path }) { content ->
+                    val isDir = content.type == "dir"
+                    Row(
+                        modifier = Modifier.fillMaxWidth()
+                            .background(c.bgCard, RoundedCornerShape(8.dp))
+                            .clickable { if (isDir) onDirClick(content.path) else onFileClick(content.path) }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Icon(
+                            if (isDir) Icons.Default.Folder else Icons.Default.Description,
+                            null,
+                            tint     = if (isDir) Yellow else c.textSecondary,
+                            modifier = Modifier.size(17.dp),
+                        )
+                        Text(content.name, fontSize = 13.sp, color = c.textPrimary,
+                            modifier = Modifier.weight(1f))
+                        if (!isDir) Text(formatSize(content.size), fontSize = 11.sp, color = c.textTertiary)
+                        if (isDir) Icon(Icons.AutoMirrored.Filled.ArrowForward, null,
+                            tint = c.textTertiary, modifier = Modifier.size(14.dp))
+                    }
                 }
             }
         }

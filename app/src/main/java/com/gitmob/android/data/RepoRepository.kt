@@ -21,6 +21,12 @@ class RepoRepository {
     private val repoDetailCache = java.util.concurrent.ConcurrentHashMap<String, Entry<GHRepo>>()
     private val branchCache     = java.util.concurrent.ConcurrentHashMap<String, Entry<List<GHBranch>>>()
     private val commitCache     = java.util.concurrent.ConcurrentHashMap<String, Entry<List<GHCommit>>>()
+    // 目录内容缓存：key = "owner/repo/ref/path"，TTL = 2 分钟
+    private val contentsCache   = java.util.concurrent.ConcurrentHashMap<String, Entry<List<GHContent>>>()
+    private val CONTENTS_TTL    = 2 * 60 * 1000L
+    // 文件内容缓存：key = "owner/repo/ref/path"，TTL = 5 分钟（文件内容变化更少）
+    private val fileContentCache = java.util.concurrent.ConcurrentHashMap<String, Entry<String>>()
+    private val FILE_TTL         = 5 * 60 * 1000L
 
     // ─── 用户 / 仓库 ───
 
@@ -86,15 +92,50 @@ class RepoRepository {
 
     // ─── Contents / Files ───
 
-    suspend fun getContents(owner: String, repo: String, path: String, ref: String): List<GHContent> =
-        withContext(Dispatchers.IO) { api.getContents(owner, repo, path.ifEmpty { "" }, ref) }
-
-    suspend fun getFileContent(owner: String, repo: String, path: String, ref: String): String =
-        withContext(Dispatchers.IO) {
-            val f = api.getFile(owner, repo, path, ref)
-            val encoded = f.content ?: return@withContext ""
-            String(Base64.decode(encoded.replace("\n", ""), Base64.DEFAULT), Charsets.UTF_8)
+    /**
+     * 获取目录内容，带 2 分钟内存缓存。
+     * 切换路径/分支时命中缓存，避免重复请求。
+     * forceRefresh = true 可强制跳过缓存（下拉刷新场景）。
+     */
+    suspend fun getContents(
+        owner: String, repo: String, path: String, ref: String,
+        forceRefresh: Boolean = false,
+    ): List<GHContent> = withContext(Dispatchers.IO) {
+        val key = "$owner/$repo/$ref/${path.ifEmpty { "__root__" }}"
+        if (!forceRefresh) {
+            contentsCache[key]?.takeIf { it.valid(CONTENTS_TTL) }?.data?.let {
+                return@withContext it
+            }
         }
+        val result = api.getContents(owner, repo, path.ifEmpty { "" }, ref)
+        contentsCache[key] = Entry(result)
+        result
+    }
+
+    /** 使 contentsCache 中该仓库的所有路径失效（push/commit 后调用） */
+    fun invalidateContentsCache(owner: String, repo: String) {
+        contentsCache.keys.removeAll { it.startsWith("$owner/$repo/") }
+    }
+
+    /**
+     * 获取文件内容（Base64 解码），带 5 分钟内存缓存。
+     */
+    suspend fun getFileContent(
+        owner: String, repo: String, path: String, ref: String,
+        forceRefresh: Boolean = false,
+    ): String = withContext(Dispatchers.IO) {
+        val key = "$owner/$repo/$ref/$path"
+        if (!forceRefresh) {
+            fileContentCache[key]?.takeIf { it.valid(FILE_TTL) }?.data?.let {
+                return@withContext it
+            }
+        }
+        val f = api.getFile(owner, repo, path, ref)
+        val encoded = f.content ?: return@withContext ""
+        val decoded = String(Base64.decode(encoded.replace("\n", ""), Base64.DEFAULT), Charsets.UTF_8)
+        fileContentCache[key] = Entry(decoded)
+        decoded
+    }
 
     // ─── Commits ───
 

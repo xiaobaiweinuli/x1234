@@ -51,26 +51,26 @@ class RepoDetailViewModel(app: Application, savedStateHandle: SavedStateHandle) 
 
     init { loadAll() }
 
-    fun loadAll() = viewModelScope.launch {
+    fun loadAll(forceRefresh: Boolean = false) = viewModelScope.launch {
         _state.update { it.copy(loading = true, error = null) }
         try {
-            val r = repository.getRepo(owner, repoName)
-            val branches = repository.getBranches(owner, repoName)
+            val r = repository.getRepo(owner, repoName, forceRefresh)
+            val branches = repository.getBranches(owner, repoName, forceRefresh)
             val starred = repository.isStarred(owner, repoName)
             _state.update { it.copy(repo = r, branches = branches, currentBranch = r.defaultBranch, isStarred = starred, loading = false) }
-            loadContents("", r.defaultBranch)
-            loadCommits(r.defaultBranch)
+            loadContents("", r.defaultBranch, forceRefresh)
+            loadCommits(r.defaultBranch, forceRefresh = forceRefresh)
             loadPRsAndIssues()
         } catch (e: Exception) {
             _state.update { it.copy(loading = false, error = e.message ?: "加载失败") }
         }
     }
 
-    fun loadContents(path: String, ref: String? = null) = viewModelScope.launch {
+    fun loadContents(path: String, ref: String? = null, forceRefresh: Boolean = false) = viewModelScope.launch {
         _state.update { it.copy(contentsLoading = true) }
         try {
             val branch = ref ?: _state.value.currentBranch
-            val contents = repository.getContents(owner, repoName, path, branch)
+            val contents = repository.getContents(owner, repoName, path, branch, forceRefresh)
                 .sortedWith(compareBy({ it.type != "dir" }, { it.name }))
             _state.update { it.copy(contents = contents, currentPath = path, contentsLoading = false) }
         } catch (e: Exception) {
@@ -84,10 +84,10 @@ class RepoDetailViewModel(app: Application, savedStateHandle: SavedStateHandle) 
         loadContents(parent)
     }
 
-    fun loadCommits(sha: String? = null) = viewModelScope.launch {
+    fun loadCommits(sha: String? = null, forceRefresh: Boolean = false) = viewModelScope.launch {
         try {
             val ref = sha ?: _state.value.currentBranch
-            val commits = repository.getCommits(owner, repoName, ref)
+            val commits = repository.getCommits(owner, repoName, ref, forceRefresh)
             _state.update { it.copy(commits = commits) }
         } catch (_: Exception) {}
     }

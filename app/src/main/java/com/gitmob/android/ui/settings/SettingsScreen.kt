@@ -45,6 +45,10 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.res.painterResource
+import com.gitmob.android.R
+import com.gitmob.android.BuildConfig
+import androidx.compose.foundation.Image
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -303,7 +307,7 @@ fun SettingsScreen(
             }
 
             Spacer(Modifier.height(8.dp))
-            Text("GitMob v1.0.0 · AGPL-3.0",
+            Text("GitMob v${BuildConfig.VERSION_NAME} · AGPL-3.0",
                 fontSize = 11.sp, color = c.textTertiary,
                 modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 8.dp))
         }
@@ -327,22 +331,18 @@ fun AboutDialog(onDismiss: () -> Unit) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            // App 图标 + 名称
-            Box(
-                modifier = Modifier.size(72.dp)
-                    .background(
-                        brush = androidx.compose.ui.graphics.Brush.verticalGradient(
-                            listOf(Color(0xFFFFA726), Color(0xFFE65100))
-                        ),
-                        shape = RoundedCornerShape(18.dp),
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(Icons.Default.AccountTree, null,
-                    tint = Color.White, modifier = Modifier.size(36.dp))
-            }
+            // App 图标（使用项目真实 PNG logo）
+            Image(
+                painter = painterResource(id = R.drawable.ic_app_logo),
+                contentDescription = "GitMob Logo",
+                modifier = Modifier
+                    .size(80.dp)
+                    .clip(RoundedCornerShape(20.dp)),
+                contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+            )
             Text("GitMob", fontWeight = FontWeight.Bold, fontSize = 22.sp, color = c.textPrimary)
-            Text("v1.0.0", fontSize = 13.sp, color = c.textTertiary)
+            // 版本号从 BuildConfig 动态读取
+            Text("v${BuildConfig.VERSION_NAME}", fontSize = 13.sp, color = c.textTertiary)
 
             HorizontalDivider(color = c.border, thickness = 0.5.dp)
 
@@ -351,7 +351,7 @@ fun AboutDialog(onDismiss: () -> Unit) {
                 DeveloperRow(
                     login = "xiaobaiweinuli",
                     displayName = "xiaobaiweinuli",
-                    avatarUrl = "https://github.com/xiaobaiweinuli.png",
+                    avatarUrl = "https://avatars.githubusercontent.com/u/94781176?v=4&s=80",
                     onClick = {
                         context.startActivity(Intent(Intent.ACTION_VIEW,
                             Uri.parse("https://github.com/xiaobaiweinuli")))

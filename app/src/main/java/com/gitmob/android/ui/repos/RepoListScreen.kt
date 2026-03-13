@@ -29,6 +29,13 @@ import com.gitmob.android.api.GHOrg
 import com.gitmob.android.api.GHRepo
 import com.gitmob.android.ui.common.*
 import com.gitmob.android.ui.theme.*
+import androidx.compose.material.icons.filled.DeleteForever
+import androidx.compose.material.icons.filled.FolderDelete
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.Surface
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3Api::class)
 @Composable
@@ -264,6 +271,7 @@ fun SwipeableRepoCard(
     if (showDeleteDialog) {
         DeleteRepoDialog(
             repoName = repo.name,
+            owner    = repo.owner.login,
             onConfirm = { onDelete(); showDeleteDialog = false },
             onDismiss = { showDeleteDialog = false },
             c = c,
@@ -389,36 +397,162 @@ private fun RepoCardContent(
 // ─── Dialogs ───────────────────────────────────────────────────
 
 @Composable
-private fun DeleteRepoDialog(repoName: String, onConfirm: () -> Unit, onDismiss: () -> Unit, c: GmColors) {
+private fun DeleteRepoDialog(
+    repoName: String,
+    owner: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+    c: GmColors,
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     var input by remember { mutableStateOf("") }
+    val fullName = "$owner/$repoName"
+
+    // 复制到剪贴板的工具函数
+    fun copyToClipboard(text: String, label: String) {
+        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        cm.setPrimaryClip(ClipData.newPlainText(label, text))
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = c.bgCard,
+        icon = {
+            Icon(Icons.Default.DeleteForever, null, tint = RedColor, modifier = Modifier.size(28.dp))
+        },
         title = { Text("删除仓库", color = c.textPrimary, fontWeight = FontWeight.SemiBold) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("此操作不可撤销。请输入仓库名 \"$repoName\" 确认删除：",
-                    fontSize = 13.sp, color = c.textSecondary, lineHeight = 20.sp)
+                // 仓库标识 + 快速复制区
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(c.bgItem, RoundedCornerShape(10.dp))
+                        .padding(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Default.FolderDelete, null,
+                        tint = RedColor, modifier = Modifier.size(16.dp))
+                    Text(
+                        fullName,
+                        fontSize = 13.sp, color = c.textPrimary,
+                        fontWeight = FontWeight.Medium,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.weight(1f),
+                    )
+                    // 快速复制按钮组
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        // 复制仓库名
+                        SmallCopyChip(
+                            label = repoName,
+                            tooltip = "复制仓库名",
+                            c = c,
+                            onClick = {
+                                copyToClipboard(repoName, "repoName")
+                                input = repoName   // 自动填入输入框
+                            },
+                        )
+                        // 复制完整路径 owner/repo
+                        SmallCopyChip(
+                            label = "全名",
+                            tooltip = "复制 $fullName",
+                            c = c,
+                            onClick = { copyToClipboard(fullName, "fullName") },
+                        )
+                    }
+                }
+
+                Text(
+                    "此操作不可撤销。请在下方输入仓库名确认删除：",
+                    fontSize = 13.sp, color = c.textSecondary, lineHeight = 20.sp,
+                )
+
                 OutlinedTextField(
-                    value = input, onValueChange = { input = it },
-                    singleLine = true, modifier = Modifier.fillMaxWidth(),
+                    value = input,
+                    onValueChange = { input = it },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
                     placeholder = { Text(repoName, color = c.textTertiary) },
+                    trailingIcon = {
+                        if (input == repoName)
+                            Icon(Icons.Default.CheckCircle, null,
+                                tint = Green, modifier = Modifier.size(18.dp))
+                    },
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = RedColor, unfocusedBorderColor = c.border,
-                        focusedTextColor = c.textPrimary, unfocusedTextColor = c.textPrimary,
-                        focusedContainerColor = c.bgItem, unfocusedContainerColor = c.bgItem,
+                        focusedBorderColor   = if (input == repoName) Green else RedColor,
+                        unfocusedBorderColor = c.border,
+                        focusedTextColor     = c.textPrimary,
+                        unfocusedTextColor   = c.textPrimary,
+                        focusedContainerColor   = c.bgItem,
+                        unfocusedContainerColor = c.bgItem,
                     ),
                 )
+
+                if (input.isNotEmpty() && input != repoName) {
+                    Text(
+                        "输入不匹配，请检查大小写",
+                        fontSize = 11.sp, color = RedColor,
+                    )
+                }
             }
         },
         confirmButton = {
-            Button(onClick = onConfirm, enabled = input == repoName,
-                colors = ButtonDefaults.buttonColors(containerColor = RedColor, disabledContainerColor = c.border)) {
+            Button(
+                onClick = onConfirm,
+                enabled = input == repoName,
+                colors  = ButtonDefaults.buttonColors(
+                    containerColor         = RedColor,
+                    disabledContainerColor = c.border,
+                ),
+            ) {
+                Icon(Icons.Default.DeleteForever, null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
                 Text("确认删除")
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消", color = c.textSecondary) } },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消", color = c.textSecondary) }
+        },
     )
+}
+
+/** 小型复制标签按钮 */
+@Composable
+private fun SmallCopyChip(label: String, tooltip: String, c: GmColors, onClick: () -> Unit) {
+    var copied by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    Surface(
+        onClick = {
+            onClick()
+            copied = true
+            scope.launch {
+                kotlinx.coroutines.delay(1500)
+                copied = false
+            }
+        },
+        shape  = RoundedCornerShape(6.dp),
+        color  = if (copied) GreenDim else c.bgActive,
+        modifier = Modifier.padding(0.dp),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            Icon(
+                if (copied) Icons.Default.Check else Icons.Default.ContentCopy,
+                contentDescription = tooltip,
+                tint     = if (copied) Green else c.textTertiary,
+                modifier = Modifier.size(11.dp),
+            )
+            Text(
+                if (copied) "已复制" else label,
+                fontSize = 10.sp,
+                color    = if (copied) Green else c.textTertiary,
+            )
+        }
+    }
 }
 
 @Composable

@@ -1,7 +1,6 @@
 name: Build & Release APK
 
 on:
-  # 手动触发，可选择版本号
   workflow_dispatch:
     inputs:
       version_name:
@@ -16,7 +15,6 @@ on:
         options:
           - debug
           - release
-  # 推送 tag 自动触发 release 构建
   push:
     tags:
       - "v*.*.*"
@@ -60,39 +58,7 @@ jobs:
           key: gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', '**/libs.versions.toml') }}
           restore-keys: gradle-
 
-      # ── 4. 写入 GitHub OAuth Client ID ──
-      - name: Inject build config
-        run: |
-          sed -i 's/YOUR_GITHUB_CLIENT_ID/${{ secrets.OAUTH_CLIENT_ID }}/g' \
-            app/build.gradle.kts
-          sed -i 's|YOUR_OAUTH_CALLBACK_URL|${{ secrets.OAUTH_CALLBACK_URL }}/callback|g' \
-            app/build.gradle.kts
-
-      # ── 5. 权限 ──
-      - name: Make gradlew executable
-        run: chmod +x gradlew
-
-      # ── 6a. Debug 构建 ──
-      - name: Build Debug APK
-        if: ${{ github.event.inputs.release_type == 'debug' || !startsWith(github.ref, 'refs/tags/') }}
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
-
-      # ── 6b. Release 构建（需要签名） ──
-      - name: Decode Keystore
-        if: ${{ github.event.inputs.release_type == 'release' || startsWith(github.ref, 'refs/tags/') }}
-        run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > /tmp/gitmob.keystore
-
-      - name: Build Release APK
-        if: ${{ github.event.inputs.release_type == 'release' || startsWith(github.ref, 'refs/tags/') }}
-        env:
-          KEYSTORE_PATH: /tmp/gitmob.keystore
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: ./gradlew assembleRelease --no-daemon --stacktrace
-
-      # ── 7. 计算版本号 ──
+      # ── 4. 计算版本号 ──
       - name: Get version
         id: version
         run: |
@@ -104,7 +70,36 @@ jobs:
             echo "name=debug-$(date +%Y%m%d-%H%M)" >> $GITHUB_OUTPUT
           fi
 
-      # ── 8. 上传 Artifact ──
+      # ── 5. 权限 ──
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      # ── 6a. Debug 构建（OAuth 凭据通过环境变量注入 BuildConfig）──
+      - name: Build Debug APK
+        if: ${{ github.event.inputs.release_type == 'debug' || !startsWith(github.ref, 'refs/tags/') }}
+        env:
+          OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID }}
+          OAUTH_CALLBACK_URL: ${{ secrets.OAUTH_CALLBACK_URL }}
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      # ── 6b. Release 构建（需要签名）──
+      - name: Decode Keystore
+        if: ${{ github.event.inputs.release_type == 'release' || startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > /tmp/gitmob.keystore
+
+      - name: Build Release APK
+        if: ${{ github.event.inputs.release_type == 'release' || startsWith(github.ref, 'refs/tags/') }}
+        env:
+          OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID }}
+          OAUTH_CALLBACK_URL: ${{ secrets.OAUTH_CALLBACK_URL }}
+          KEYSTORE_PATH: /tmp/gitmob.keystore
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
+
+      # ── 7. 上传 Artifact ──
       - name: Upload Debug APK
         if: ${{ github.event.inputs.release_type == 'debug' || !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/upload-artifact@v4
@@ -121,7 +116,7 @@ jobs:
           path: app/build/outputs/apk/release/*.apk
           retention-days: 90
 
-      # ── 9. 自动发布 GitHub Release（仅 tag 触发） ──
+      # ── 8. 自动发布 GitHub Release（仅 tag 触发）──
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.release_type == 'release'
         uses: softprops/action-gh-release@v2
@@ -134,7 +129,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ── 10. 清理 keystore ──
+      # ── 9. 清理 keystore ──
       - name: Clean keystore
         if: always()
         run: rm -f /tmp/gitmob.keystore

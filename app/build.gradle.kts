@@ -14,8 +14,11 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0.0"
-        buildConfigField("String", "GITHUB_CLIENT_ID", "\"YOUR_GITHUB_CLIENT_ID\"")
-        buildConfigField("String", "OAUTH_REDIRECT_URI", "\"YOUR_OAUTH_CALLBACK_URL\"")
+        // OAuth 凭据：CI 通过环境变量注入，本地开发时回退占位符
+        val oauthClientId  = System.getenv("OAUTH_CLIENT_ID")  ?: "YOUR_GITHUB_CLIENT_ID"
+        val oauthCallback  = System.getenv("OAUTH_CALLBACK_URL") ?: "YOUR_OAUTH_CALLBACK_URL"
+        buildConfigField("String", "GITHUB_CLIENT_ID",  "\"$oauthClientId\"")
+        buildConfigField("String", "OAUTH_REDIRECT_URI", "\"$oauthCallback/callback\"")
         manifestPlaceholders["appScheme"] = "gitmob"
         manifestPlaceholders["appHost"] = "oauth"
     }
@@ -74,6 +77,7 @@ android {
             )
         }
     }
+}
 
 dependencies {
     implementation(libs.androidx.core.ktx)
