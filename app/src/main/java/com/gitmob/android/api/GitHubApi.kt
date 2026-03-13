@@ -222,6 +222,33 @@ interface GitHubApi {
         @Path("sha") sha: String,
     ): GHCommitFull
 
+    // ── Git Data API (Reset / Revert) ──────────────────────────────────────
+
+    /** 获取 Git 提交对象（含 tree SHA，用于构造 revert commit） */
+    @GET("repos/{owner}/{repo}/git/commits/{sha}")
+    suspend fun getGitCommit(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("sha") sha: String,
+    ): GHGitCommit
+
+    /** 创建新提交（revert commit 的核心步骤） */
+    @POST("repos/{owner}/{repo}/git/commits")
+    suspend fun createCommit(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Body body: GHCreateCommitRequest,
+    ): GHCreateCommitResponse
+
+    /** 强制更新分支指针（回滚 = force push to target SHA） */
+    @PATCH("repos/{owner}/{repo}/git/refs/heads/{branch}")
+    suspend fun updateRef(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("branch") branch: String,
+        @Body body: GHUpdateRefRequest,
+    ): GHRef
+
     // ── Check name availability ──
     @GET("repos/{owner}/{repo}")
     suspend fun checkRepoExists(

@@ -37,6 +37,11 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.RestartAlt
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -425,45 +430,72 @@ fun CommitDetailSheet(
 ) {
     val context = LocalContext.current
     val state by vm.state.collectAsState()
-    var showResetDialog by remember { mutableStateOf(false) }
+    var showResetConfirm  by remember { mutableStateOf(false) }
+    var showRevertConfirm by remember { mutableStateOf(false) }
 
     // ── Diff 查看器（二级 Sheet）──────────────────────────────────────────
     state.selectedFilePatch?.let { (filename, patch) ->
-        FileDiffSheet(
-            filename = filename,
-            patch = patch,
-            c = c,
-            onDismiss = vm::closeFilePatch,
+        FileDiffSheet(filename = filename, patch = patch, c = c, onDismiss = vm::closeFilePatch)
+    }
+
+    // ── 回滚确认 ──────────────────────────────────────────────────────────
+    if (showResetConfirm) {
+        ResetConfirmDialog(
+            shortSha = commit.shortSha,
+            branch   = state.currentBranch,
+            c        = c,
+            onConfirm = {
+                vm.resetToCommit(commit.sha)
+                showResetConfirm = false
+            },
+            onDismiss = { showResetConfirm = false },
         )
     }
 
-    // ── Reset 对话框 ───────────────────────────────────────────────────────
-    if (showResetDialog) {
-        ResetCommitDialog(
-            sha = commit.sha,
-            shortSha = commit.shortSha,
-            c = c,
-            onConfirm = { sha, mode ->
-                // Reset 是本地 git 操作，需要通过 LocalRepoViewModel
-                // 这里仅复制 SHA 到剪贴板并提示用户（远程仓库详情无本地路径）
-                val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
-                        as android.content.ClipboardManager
-                cm.setPrimaryClip(android.content.ClipData.newPlainText("sha", sha))
-                android.widget.Toast.makeText(
-                    context, "已复制 SHA：${sha.take(7)}\n在「本地」Tab 执行 git reset --$mode $sha",
-                    android.widget.Toast.LENGTH_LONG).show()
-                showResetDialog = false
+    // ── 撤销确认 ──────────────────────────────────────────────────────────
+    if (showRevertConfirm) {
+        RevertConfirmDialog(
+            commit    = commit,
+            branch    = state.currentBranch,
+            c         = c,
+            onConfirm = { msg ->
+                vm.revertCommit(commit.sha, msg)
+                showRevertConfirm = false
             },
-            onDismiss = { showResetDialog = false },
+            onDismiss = { showRevertConfirm = false },
         )
+    }
+
+    // ── 操作结果提示 ───────────────────────────────────────────────────────
+    state.gitOpResult?.let { result ->
+        LaunchedEffect(result) {
+            kotlinx.coroutines.delay(3000)
+            vm.clearGitOpResult()
+        }
+        GitOpResultSnackbar(result = result, c = c)
     }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = c.bgCard,
-        dragHandle = { BottomSheetDefaults.DragHandle(color = c.border) },
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor   = c.bgCard,
+        dragHandle       = { BottomSheetDefaults.DragHandle(color = c.border) },
+        sheetState       = rememberModalBottomSheetState(skipPartiallyExpanded = true),
     ) {
+        // 操作进行中遮罩
+        if (state.gitOpInProgress) {
+            Box(
+                Modifier.fillMaxWidth().padding(24.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    CircularProgressIndicator(color = Coral, modifier = Modifier.size(32.dp))
+                    Text("正在执行操作…", fontSize = 13.sp, color = c.textSecondary)
+                }
+            }
+            return@ModalBottomSheet
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -513,9 +545,9 @@ fun CommitDetailSheet(
                 Spacer(Modifier.height(8.dp))
                 files.forEach { file ->
                     val (statusColor, statusLabel) = when (file.status) {
-                        "added"    -> Green    to "A"
-                        "removed"  -> RedColor to "D"
-                        "modified" -> Yellow   to "M"
+                        "added"    -> Green     to "A"
+                        "removed"  -> RedColor  to "D"
+                        "modified" -> Yellow    to "M"
                         "renamed"  -> BlueColor to "R"
                         else       -> c.textTertiary to "?"
                     }
@@ -543,11 +575,9 @@ fun CommitDetailSheet(
                                 .background(statusColor.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
                                 .padding(horizontal = 5.dp, vertical = 1.dp),
                         )
-                        Text(
-                            file.filename, fontSize = 12.sp, color = c.textPrimary,
+                        Text(file.filename, fontSize = 12.sp, color = c.textPrimary,
                             fontFamily = FontFamily.Monospace,
-                            modifier = Modifier.weight(1f), maxLines = 1,
-                        )
+                            modifier = Modifier.weight(1f), maxLines = 1)
                         if (file.additions > 0 || file.deletions > 0) {
                             Text("+${file.additions}/-${file.deletions}",
                                 fontSize = 11.sp, color = c.textTertiary)
@@ -564,32 +594,62 @@ fun CommitDetailSheet(
             GmDivider()
             Spacer(Modifier.height(12.dp))
 
-            // ── 操作按钮 ─────────────────────────────────────────────────
+            // ── 操作区 ─────────────────────────────────────────────────
             Text("操作", fontSize = 12.sp, color = c.textSecondary, fontWeight = FontWeight.Medium)
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(10.dp))
 
-            // 回滚 / Reset
-            OutlinedButton(
-                onClick = { showResetDialog = true },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                border = ButtonDefaults.outlinedButtonBorder.copy(
-                    brush = androidx.compose.ui.graphics.SolidColor(Yellow.copy(alpha = 0.6f))),
+            // 撤销（Revert）：创建新 commit，保留历史 ─────────────────────
+            Button(
+                onClick = { showRevertConfirm = true },
+                modifier = Modifier.fillMaxWidth().height(46.dp),
+                shape  = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = BlueColor),
             ) {
-                Icon(Icons.Default.Undo, null, tint = Yellow, modifier = Modifier.size(16.dp))
+                Icon(Icons.Default.SwapHoriz, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("回滚 / Reset 到此提交", fontSize = 14.sp, color = Yellow)
+                Column {
+                    Text("撤销此提交", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                }
             }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "· 创建新 commit，内容回退到此提交之前，不重写历史",
+                fontSize = 11.sp, color = c.textTertiary,
+                modifier = Modifier.padding(horizontal = 4.dp),
+            )
 
-            // 在 GitHub 查看
+            Spacer(Modifier.height(12.dp))
+
+            // 回滚（Reset）：强制移动分支指针 ────────────────────────────
+            OutlinedButton(
+                onClick = { showResetConfirm = true },
+                modifier = Modifier.fillMaxWidth().height(46.dp),
+                shape  = RoundedCornerShape(12.dp),
+                border = ButtonDefaults.outlinedButtonBorder.copy(
+                    brush = androidx.compose.ui.graphics.SolidColor(RedColor.copy(alpha = 0.7f))),
+            ) {
+                Icon(Icons.Default.RestartAlt, null, tint = RedColor, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("回滚到此提交", fontSize = 13.sp, color = RedColor, fontWeight = FontWeight.SemiBold)
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "· 强制将分支 HEAD 指向此 SHA，之后的提交将消失（危险）",
+                fontSize = 11.sp, color = c.textTertiary,
+                modifier = Modifier.padding(horizontal = 4.dp),
+            )
+
+            Spacer(Modifier.height(16.dp))
+
+            // 在 GitHub 查看 ──────────────────────────────────────────────
             OutlinedButton(
                 onClick = {
                     context.startActivity(android.content.Intent(
-                        android.content.Intent.ACTION_VIEW, android.net.Uri.parse(commit.htmlUrl)))
+                        android.content.Intent.ACTION_VIEW,
+                        android.net.Uri.parse(commit.htmlUrl)))
                 },
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
+                shape  = RoundedCornerShape(12.dp),
                 border = ButtonDefaults.outlinedButtonBorder.copy(
                     brush = androidx.compose.ui.graphics.SolidColor(c.border)),
             ) {
@@ -602,92 +662,183 @@ fun CommitDetailSheet(
     }
 }
 
-// ─── Dialogs ────────────────────────────────────────────────────────
+// ─── ResetConfirmDialog（回滚：重写历史，危险操作）───────────────────────────
 
 @Composable
-private fun BranchPickerDialog(branches: List<GHBranch>, current: String, c: GmColors,
-    onSelect: (String) -> Unit, onDismiss: () -> Unit) {
+private fun ResetConfirmDialog(
+    shortSha: String, branch: String, c: GmColors,
+    onConfirm: () -> Unit, onDismiss: () -> Unit,
+) {
     AlertDialog(
-        onDismissRequest = onDismiss, containerColor = c.bgCard,
-        title = { Text("切换分支", color = c.textPrimary) },
-        text = {
-            LazyColumn(Modifier.heightIn(max = 360.dp)) {
-                items(branches) { b ->
-                    Row(modifier = Modifier.fillMaxWidth().clickable { onSelect(b.name) }
-                        .padding(vertical = 10.dp, horizontal = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Icon(Icons.Default.AccountTree, null,
-                            tint = if (b.name == current) Coral else c.textTertiary, modifier = Modifier.size(14.dp))
-                        Text(b.name, fontSize = 14.sp, color = if (b.name == current) Coral else c.textPrimary,
-                            modifier = Modifier.weight(1f))
-                        if (b.name == current) Icon(Icons.Default.Check, null, tint = Coral, modifier = Modifier.size(16.dp))
+        onDismissRequest = onDismiss,
+        containerColor   = c.bgCard,
+        icon = {
+            Icon(Icons.Default.RestartAlt, null, tint = RedColor, modifier = Modifier.size(28.dp))
+        },
+        title = { Text("确认回滚", color = c.textPrimary, fontWeight = FontWeight.SemiBold) },
+        text  = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                // 目标提交
+                Row(
+                    modifier = Modifier.fillMaxWidth()
+                        .background(c.bgItem, RoundedCornerShape(8.dp)).padding(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("目标", fontSize = 12.sp, color = c.textTertiary)
+                    Text(
+                        shortSha, fontSize = 13.sp, color = Coral,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.background(CoralDim, RoundedCornerShape(4.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                    Text("on  $branch", fontSize = 12.sp, color = c.textSecondary)
+                }
+                // 危险警告
+                Row(
+                    modifier = Modifier.fillMaxWidth()
+                        .background(RedDim, RoundedCornerShape(8.dp)).padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(Icons.Default.Warning, null, tint = RedColor, modifier = Modifier.size(18.dp))
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("⚠ 危险操作", fontSize = 13.sp, color = RedColor, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "此操作将强制把分支指针指向目标提交，之后的所有提交记录将从分支上消失（相当于 git push -f）。如果分支有保护规则，操作可能被拒绝。",
+                            fontSize = 12.sp, color = RedColor.copy(alpha = 0.85f), lineHeight = 17.sp,
+                        )
                     }
                 }
             }
         },
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消", color = c.textSecondary) } },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                colors  = ButtonDefaults.buttonColors(containerColor = RedColor),
+                shape   = RoundedCornerShape(10.dp),
+            ) { Text("确认回滚", fontWeight = FontWeight.SemiBold) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消", color = c.textSecondary) }
+        },
     )
 }
 
-@Composable
-private fun NewBranchDialog(c: GmColors, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
-    var name by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss, containerColor = c.bgCard,
-        title = { Text("新建分支", color = c.textPrimary) },
-        text = {
-            OutlinedTextField(value = name, onValueChange = { name = it },
-                placeholder = { Text("feature/my-feature", color = c.textTertiary) },
-                singleLine = true, modifier = Modifier.fillMaxWidth(),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Coral, unfocusedBorderColor = c.border,
-                    focusedTextColor = c.textPrimary, unfocusedTextColor = c.textPrimary,
-                    focusedContainerColor = c.bgItem, unfocusedContainerColor = c.bgItem))
-        },
-        confirmButton = {
-            Button(onClick = { if (name.isNotBlank()) onConfirm(name.trim()) },
-                colors = ButtonDefaults.buttonColors(containerColor = Coral)) { Text("创建") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消", color = c.textSecondary) } },
-    )
-}
+// ─── RevertConfirmDialog（撤销：创建新 commit，安全）────────────────────────
 
 @Composable
-private fun RenameBranchDialog(currentName: String, c: GmColors,
-    onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
-    var name by remember { mutableStateOf(currentName) }
-    val isValid = name.isNotBlank() && name != currentName
+private fun RevertConfirmDialog(
+    commit: GHCommitFull, branch: String, c: GmColors,
+    onConfirm: (message: String) -> Unit, onDismiss: () -> Unit,
+) {
+    val defaultMsg = "Revert \"${commit.commit.message.lines().first().take(50)}\""
+    var revertMsg by remember { mutableStateOf(defaultMsg) }
+
     AlertDialog(
-        onDismissRequest = onDismiss, containerColor = c.bgCard,
-        title = { Text("重命名分支", color = c.textPrimary) },
-        text = {
-            OutlinedTextField(value = name, onValueChange = { name = it },
-                label = { Text("新分支名") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Coral, unfocusedBorderColor = c.border,
-                    focusedTextColor = c.textPrimary, unfocusedTextColor = c.textPrimary,
-                    focusedContainerColor = c.bgItem, unfocusedContainerColor = c.bgItem))
+        onDismissRequest = onDismiss,
+        containerColor   = c.bgCard,
+        icon = {
+            Icon(Icons.Default.SwapHoriz, null, tint = BlueColor, modifier = Modifier.size(28.dp))
         },
-        confirmButton = {
-            Button(onClick = { onConfirm(name) }, enabled = isValid,
-                colors = ButtonDefaults.buttonColors(containerColor = Coral, disabledContainerColor = c.border)) {
-                Text("重命名")
+        title = { Text("撤销此提交", color = c.textPrimary, fontWeight = FontWeight.SemiBold) },
+        text  = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                // 目标提交信息
+                Row(
+                    modifier = Modifier.fillMaxWidth()
+                        .background(c.bgItem, RoundedCornerShape(8.dp)).padding(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        commit.shortSha, fontSize = 12.sp, color = Coral,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.background(CoralDim, RoundedCornerShape(4.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                    Text(
+                        commit.commit.message.lines().first(),
+                        fontSize = 12.sp, color = c.textPrimary,
+                        modifier = Modifier.weight(1f), maxLines = 1,
+                    )
+                }
+                // 安全说明
+                Row(
+                    modifier = Modifier.fillMaxWidth()
+                        .background(BlueColor.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
+                        .padding(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(Icons.Default.Info, null, tint = BlueColor, modifier = Modifier.size(16.dp))
+                    Text(
+                        "将创建一个新的 revert commit，把分支内容恢复到此提交之前的状态。不重写历史，可安全用于受保护分支。",
+                        fontSize = 12.sp, color = BlueColor.copy(alpha = 0.9f), lineHeight = 17.sp,
+                    )
+                }
+                // commit message 编辑
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Revert commit 信息", fontSize = 12.sp,
+                        color = c.textSecondary, fontWeight = FontWeight.Medium)
+                    OutlinedTextField(
+                        value         = revertMsg,
+                        onValueChange = { revertMsg = it },
+                        singleLine    = true,
+                        modifier      = Modifier.fillMaxWidth(),
+                        shape         = RoundedCornerShape(10.dp),
+                        colors        = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor      = BlueColor,
+                            unfocusedBorderColor    = c.border,
+                            focusedTextColor        = c.textPrimary,
+                            unfocusedTextColor      = c.textPrimary,
+                            focusedContainerColor   = c.bgItem,
+                            unfocusedContainerColor = c.bgItem,
+                        ),
+                    )
+                }
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消", color = c.textSecondary) } },
+        confirmButton = {
+            Button(
+                onClick  = { if (revertMsg.isNotBlank()) onConfirm(revertMsg.trim()) },
+                enabled  = revertMsg.isNotBlank(),
+                colors   = ButtonDefaults.buttonColors(containerColor = BlueColor),
+                shape    = RoundedCornerShape(10.dp),
+            ) { Text("确认撤销", fontWeight = FontWeight.SemiBold) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消", color = c.textSecondary) }
+        },
     )
 }
 
-private fun formatSize(bytes: Long): String = when {
-    bytes < 1024 -> "${bytes}B"
-    bytes < 1024 * 1024 -> "${bytes / 1024}KB"
-    else -> "${bytes / 1024 / 1024}MB"
+// ─── 操作结果浮动提示 ────────────────────────────────────────────────────────
+
+@Composable
+private fun GitOpResultSnackbar(result: GitOpResult, c: GmColors) {
+    val bg  = if (result.success) GreenDim  else RedDim
+    val fg  = if (result.success) Green     else RedColor
+    val ico = if (result.success) Icons.Default.CheckCircle else Icons.Default.Error
+    Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(bg, RoundedCornerShape(12.dp))
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(ico, null, tint = fg, modifier = Modifier.size(18.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "${result.opName}${if (result.success) "成功" else "失败"}",
+                    fontSize = 13.sp, color = fg, fontWeight = FontWeight.SemiBold,
+                )
+                Text(result.detail, fontSize = 12.sp, color = fg.copy(alpha = 0.8f), lineHeight = 16.sp)
+            }
+        }
+    }
 }
 
-private fun formatDate(iso: String): String = try {
-    iso.split("T").firstOrNull() ?: iso
-} catch (_: Exception) { iso }
 
 // ─── FileDiffSheet ──────────────────────────────────────────────────────────
 
@@ -751,123 +902,4 @@ fun FileDiffSheet(filename: String, patch: String, c: GmColors, onDismiss: () ->
             }
         }
     }
-}
-
-// ─── ResetCommitDialog ──────────────────────────────────────────────────────
-
-@Composable
-fun ResetCommitDialog(
-    sha: String, shortSha: String, c: GmColors,
-    onConfirm: (sha: String, mode: String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var selectedMode by remember { mutableStateOf("mixed") }
-
-    val modes = listOf(
-        Triple("soft",  "Soft Reset",  "保留暂存区和工作区的变更，仅移动 HEAD"),
-        Triple("mixed", "Mixed Reset", "清空暂存区，保留工作区变更（默认推荐）"),
-        Triple("hard",  "Hard Reset",  "⚠ 彻底丢弃所有未提交变更，不可恢复"),
-    )
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = c.bgCard,
-        title = {
-            Row(verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Icon(Icons.Default.Undo, null, tint = Yellow, modifier = Modifier.size(20.dp))
-                Text("回滚 / Reset", color = c.textPrimary, fontWeight = FontWeight.SemiBold)
-            }
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                // 目标提交
-                Row(
-                    modifier = Modifier.fillMaxWidth()
-                        .background(c.bgItem, RoundedCornerShape(8.dp))
-                        .padding(10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text("目标", fontSize = 12.sp, color = c.textTertiary)
-                    Text(shortSha, fontSize = 13.sp, color = Coral,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.background(CoralDim, RoundedCornerShape(4.dp))
-                            .padding(horizontal = 6.dp, vertical = 2.dp))
-                }
-
-                // Reset 模式选择
-                modes.forEach { (mode, label, desc) ->
-                    val selected = selectedMode == mode
-                    val borderColor = if (selected) Coral else c.border
-                    val isHard = mode == "hard"
-                    Row(
-                        modifier = Modifier.fillMaxWidth()
-                            .background(
-                                if (selected) CoralDim else c.bgItem,
-                                RoundedCornerShape(10.dp),
-                            )
-                            .border(1.dp, borderColor, RoundedCornerShape(10.dp))
-                            .clickable { selectedMode = mode }
-                            .padding(10.dp),
-                        verticalAlignment = Alignment.Top,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        RadioButton(
-                            selected = selected,
-                            onClick = { selectedMode = mode },
-                            colors = RadioButtonDefaults.colors(selectedColor = Coral,
-                                unselectedColor = c.border),
-                            modifier = Modifier.size(20.dp).padding(top = 2.dp),
-                        )
-                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalAlignment = Alignment.CenterVertically) {
-                                Text(label, fontSize = 13.sp, color = c.textPrimary,
-                                    fontWeight = FontWeight.Medium)
-                                if (isHard) {
-                                    Text("危险", fontSize = 10.sp, color = RedColor,
-                                        modifier = Modifier
-                                            .background(RedDim, RoundedCornerShape(4.dp))
-                                            .padding(horizontal = 4.dp, vertical = 1.dp))
-                                }
-                            }
-                            Text(desc, fontSize = 11.sp, color = c.textTertiary, lineHeight = 15.sp)
-                        }
-                    }
-                }
-
-                // Hard 模式警告
-                if (selectedMode == "hard") {
-                    Row(
-                        modifier = Modifier.fillMaxWidth()
-                            .background(RedDim, RoundedCornerShape(8.dp))
-                            .padding(10.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        Icon(Icons.Default.Warning, null,
-                            tint = RedColor, modifier = Modifier.size(16.dp))
-                        Text("Hard Reset 将永久丢失所有未提交的工作区变更，无法撤销。",
-                            fontSize = 11.sp, color = RedColor, lineHeight = 15.sp)
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = { onConfirm(sha, selectedMode) },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (selectedMode == "hard") RedColor else Coral),
-                shape = RoundedCornerShape(10.dp),
-            ) {
-                Text("执行 ${selectedMode.uppercase()} Reset",
-                    fontWeight = FontWeight.SemiBold)
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("取消", color = c.textSecondary)
-            }
-        },
-    )
 }

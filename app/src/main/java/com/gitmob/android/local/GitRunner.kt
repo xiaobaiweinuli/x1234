@@ -1,208 +1,363 @@
 package com.gitmob.android.local
 
-import com.gitmob.android.auth.RootManager
 import com.gitmob.android.util.LogManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.eclipse.jgit.api.Git
+import org.eclipse.jgit.api.ResetCommand
+import org.eclipse.jgit.api.errors.EmptyCommitException
+import org.eclipse.jgit.api.errors.NoHeadException
+import org.eclipse.jgit.lib.ConfigConstants
+import org.eclipse.jgit.lib.PersonIdent
+import org.eclipse.jgit.lib.RepositoryBuilder
+import org.eclipse.jgit.revwalk.RevWalk
+import org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider
 import java.io.File
 
 /**
- * 本地 Git 命令执行器
+ * 本地 Git 操作封装 —— 基于 JGit（纯 Java 实现，无需外部 git 可执行文件）
  *
- * ▸ git 路径采用「运行时动态查找」而非 by lazy（lazy 在无存储权限时缓存空值）
- * ▸ 优先通过 Shell which/type 命令发现 git，其次扫描已知路径
- * ▸ ProcessBuilder 中注入 Termux PATH，使 git 能被 Shell 正常解析
- * ▸ Root 模式通过 libsu 提权执行
+ * ▸ 所有耗时操作均在 Dispatchers.IO 执行
+ * ▸ Git 对象使用 use {} 确保资源正确释放
+ * ▸ 统一返回 GitResult，调用方通过 .success / .error 判断结果
  */
 object GitRunner {
 
     private const val TAG = "GitRunner"
 
-    private val KNOWN_PATHS = listOf(
-        "/data/data/com.termux/files/usr/bin/git",
-        "/data/user/0/com.termux/files/usr/bin/git",
-        "/usr/bin/git",
-        "/usr/local/bin/git",
-        "/bin/git",
-    )
-
-    /** 运行时查找 git 可执行文件路径（每次调用，无缓存）*/
-    private fun findGitPath(): String {
-        // 1. 用 Shell which 查（不依赖文件访问权限）
-        try {
-            val proc = Runtime.getRuntime().exec(
-                arrayOf("/system/bin/sh", "-c",
-                    "which git 2>/dev/null || type -P git 2>/dev/null")
-            )
-            val found = proc.inputStream.bufferedReader().readLine()?.trim() ?: ""
-            proc.waitFor()
-            if (found.isNotEmpty() && found.startsWith("/")) {
-                LogManager.d(TAG, "which 找到 git：$found")
-                return found
-            }
-        } catch (e: Exception) {
-            LogManager.w(TAG, "which 查找失败", e)
-        }
-
-        // 2. 扫描已知路径
-        for (p in KNOWN_PATHS) {
-            if (File(p).exists()) {
-                LogManager.d(TAG, "已知路径找到 git：$p")
-                return p
-            }
-        }
-
-        // 3. 检查是否直接 `git` 命令可用（PATH 中有）
-        try {
-            val proc = Runtime.getRuntime().exec(
-                arrayOf("/system/bin/sh", "-c", "git --version 2>/dev/null")
-            )
-            val out = proc.inputStream.bufferedReader().readLine()?.trim() ?: ""
-            proc.waitFor()
-            if (out.startsWith("git version")) {
-                LogManager.d(TAG, "Shell PATH 中可用：git  ($out)")
-                return "git"   // 交给 Shell 用 PATH 解析
-            }
-        } catch (_: Exception) {}
-
-        LogManager.w(TAG, "未找到 git 可执行文件")
-        return ""
-    }
-
-    val isGitAvailable: Boolean get() = findGitPath().isNotEmpty()
+    /** 所有操作都基于 JGit，始终可用 */
+    val isGitAvailable: Boolean get() = true
 
     data class GitResult(
         val success: Boolean,
-        val output: List<String>,
+        val output: List<String> = emptyList(),
         val error: String = "",
     )
 
-    private val NO_GIT = GitResult(false, emptyList(),
-        "未找到 git。\n请确认：\n1. 已在 Termux 安装：pkg install git\n" +
-        "2. 已授予「所有文件访问权限」（设置→高级→文件访问权限）")
+    // ─── 仓库探测 ──────────────────────────────────────────────────────────
 
-    /** 在指定目录执行 git 命令 */
-    suspend fun run(workDir: String, vararg args: String, useRoot: Boolean = false): GitResult =
-        withContext(Dispatchers.IO) {
-            val gitBin = findGitPath()
-            if (gitBin.isEmpty()) return@withContext NO_GIT
-            if (useRoot && RootManager.isGranted) runAsRoot(workDir, gitBin, *args)
-            else runNormal(workDir, gitBin, *args)
-        }
-
-    private fun runNormal(workDir: String, gitBin: String, vararg args: String): GitResult {
-        return try {
-            // 若 gitBin == "git"，用 sh -c 来让 Shell 解析 PATH
-            val cmd: List<String> = if (gitBin == "git" || gitBin.isEmpty()) {
-                val escaped = args.joinToString(" ") { shellEscape(it) }
-                listOf("/system/bin/sh", "-c", "git $escaped")
-            } else {
-                buildList { add(gitBin); addAll(args) }
+    suspend fun isGitRepo(path: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            File(path, ".git").exists().also {
+                if (it) LogManager.d(TAG, "isGitRepo($path) = true")
             }
+        } catch (e: Exception) {
+            LogManager.w(TAG, "isGitRepo 异常", e); false
+        }
+    }
 
-            val termuxBin = "/data/data/com.termux/files/usr/bin"
-            val process = ProcessBuilder(cmd)
-                .directory(File(workDir))
-                .redirectErrorStream(true)
-                .also { pb ->
-                    pb.environment().also { env ->
-                        val oldPath = env["PATH"] ?: "/usr/bin:/bin"
-                        env["PATH"] = "$termuxBin:$oldPath"
-                        env["GIT_TERMINAL_PROMPT"] = "0"
-                        env["HOME"] = workDir
-                        env["LD_LIBRARY_PATH"] = "/data/data/com.termux/files/usr/lib"
+    // ─── git init ──────────────────────────────────────────────────────────
+
+    suspend fun init(path: String): GitResult = withContext(Dispatchers.IO) {
+        try {
+            val dir = File(path).also { it.mkdirs() }
+            Git.init().setDirectory(dir).setInitialBranch("main").call().use {
+                LogManager.i(TAG, "init 成功: $path")
+                GitResult(true, listOf("Initialized empty Git repository in $path/.git/"))
+            }
+        } catch (e: Exception) {
+            LogManager.e(TAG, "init 失败", e)
+            GitResult(false, error = e.message ?: "init 失败")
+        }
+    }
+
+    // ─── git add . ────────────────────────────────────────────────────────
+
+    suspend fun addAll(path: String): GitResult = withContext(Dispatchers.IO) {
+        try {
+            openGit(path).use { git ->
+                git.add().addFilepattern(".").call()
+                LogManager.d(TAG, "add . 成功: $path")
+                GitResult(true, listOf("已暂存所有变更"))
+            }
+        } catch (e: Exception) {
+            LogManager.e(TAG, "add 失败", e)
+            GitResult(false, error = e.message ?: "add 失败")
+        }
+    }
+
+    // ─── git commit ───────────────────────────────────────────────────────
+
+    suspend fun commit(
+        path: String,
+        message: String,
+        authorName: String = "GitMob",
+        authorEmail: String = "gitmob@local",
+    ): GitResult = withContext(Dispatchers.IO) {
+        try {
+            openGit(path).use { git ->
+                val author = PersonIdent(authorName, authorEmail)
+                val commit = git.commit()
+                    .setMessage(message)
+                    .setAuthor(author)
+                    .setCommitter(author)
+                    .setAllowEmpty(false)
+                    .call()
+                val sha = commit.name.take(7)
+                LogManager.i(TAG, "commit 成功: $sha $message")
+                GitResult(true, listOf("[main $sha] $message"))
+            }
+        } catch (e: EmptyCommitException) {
+            LogManager.d(TAG, "nothing to commit")
+            GitResult(true, listOf("nothing to commit"), "nothing to commit")
+        } catch (e: NoHeadException) {
+            // 首次提交没有 HEAD，也属于正常
+            LogManager.d(TAG, "NoHeadException（首次提交）")
+            GitResult(true, listOf("initial commit"))
+        } catch (e: Exception) {
+            LogManager.e(TAG, "commit 失败", e)
+            GitResult(false, error = e.message ?: "commit 失败")
+        }
+    }
+
+    // ─── git push ─────────────────────────────────────────────────────────
+
+    suspend fun push(
+        path: String,
+        remoteUrl: String,
+        branch: String,
+        token: String,
+    ): GitResult = withContext(Dispatchers.IO) {
+        try {
+            openGit(path).use { git ->
+                val creds = tokenCredentials(token)
+                val authedUrl = injectToken(remoteUrl, token)
+
+                // 确保 remote origin 指向正确 URL（含 token）
+                setRemoteUrl(git, authedUrl)
+
+                val results = git.push()
+                    .setRemote("origin")
+                    .add("refs/heads/$branch:refs/heads/$branch")
+                    .setCredentialsProvider(creds)
+                    .setForce(false)
+                    .call()
+
+                // 推送完成后恢复原始 URL（不含 token，安全）
+                setRemoteUrl(git, remoteUrl)
+
+                val msgs = results.flatMap { res ->
+                    res.remoteUpdates.map { update ->
+                        "${update.remoteName}: ${update.status}"
                     }
                 }
-                .start()
-            val lines    = process.inputStream.bufferedReader().readLines()
-            val exitCode = process.waitFor()
-            LogManager.d(TAG, "git ${args.take(2).joinToString(" ")} → exit=$exitCode")
-            if (exitCode == 0) GitResult(true, lines)
-            else GitResult(false, lines, lines.joinToString("\n").take(400))
+                LogManager.i(TAG, "push 成功: $branch")
+                GitResult(true, msgs.ifEmpty { listOf("推送成功") })
+            }
         } catch (e: Exception) {
-            LogManager.e(TAG, "git 执行异常", e)
-            GitResult(false, emptyList(), e.message ?: "执行失败")
+            LogManager.e(TAG, "push 失败", e)
+            GitResult(false, error = friendlyError(e))
         }
     }
 
-    private suspend fun runAsRoot(workDir: String, gitBin: String, vararg args: String): GitResult {
-        return try {
-            val escapedArgs = args.joinToString(" ") { shellEscape(it) }
-            val bin = if (gitBin == "git") gitBin else shellEscape(gitBin)
-            val cmd = "cd ${shellEscape(workDir)} && $bin $escapedArgs"
-            val output = RootManager.exec(cmd)
-            GitResult(true, output)
+    // ─── git pull ─────────────────────────────────────────────────────────
+
+    suspend fun pull(
+        path: String,
+        token: String,
+        branch: String = "HEAD",
+    ): GitResult = withContext(Dispatchers.IO) {
+        try {
+            openGit(path).use { git ->
+                val remoteUrl = remoteUrl(path) ?: return@withContext GitResult(false, error = "未设置远程地址")
+                val authedUrl = injectToken(remoteUrl, token)
+                setRemoteUrl(git, authedUrl)
+
+                val result = git.pull()
+                    .setRemote("origin")
+                    .setCredentialsProvider(tokenCredentials(token))
+                    .call()
+
+                setRemoteUrl(git, remoteUrl)
+
+                if (result.isSuccessful) {
+                    LogManager.i(TAG, "pull 成功")
+                    GitResult(true, listOf("pull 成功"))
+                } else {
+                    val msg = result.mergeResult?.toString() ?: "pull 失败"
+                    GitResult(false, error = msg)
+                }
+            }
         } catch (e: Exception) {
-            LogManager.e(TAG, "Root git 执行异常", e)
-            GitResult(false, emptyList(), e.message ?: "Root 执行失败")
+            LogManager.e(TAG, "pull 失败", e)
+            GitResult(false, error = friendlyError(e))
         }
     }
 
-    private fun shellEscape(s: String) = "'${s.replace("'", "'\\''")}'"
+    // ─── git clone ────────────────────────────────────────────────────────
 
-    // ─── 高级组合操作 ──────────────────────────────────────────
+    suspend fun clone(
+        url: String,
+        targetDir: String,
+        token: String,
+        useRoot: Boolean = false,   // JGit 原生实现，无需 root
+    ): GitResult = withContext(Dispatchers.IO) {
+        try {
+            val dir = File(targetDir)
+            dir.mkdirs()
 
-    suspend fun isGitRepo(path: String): Boolean {
-        val r = run(path, "rev-parse", "--git-dir")
-        return r.success || File(path, ".git").exists()
+            val authedUrl = injectToken(url, token)
+            LogManager.i(TAG, "clone 开始: $url → $targetDir")
+
+            Git.cloneRepository()
+                .setURI(authedUrl)
+                .setDirectory(dir)
+                .setCredentialsProvider(tokenCredentials(token))
+                .setCloneAllBranches(false)
+                .setProgressMonitor(LogProgressMonitor())
+                .call()
+                .use {
+                    LogManager.i(TAG, "clone 成功: $targetDir")
+                    GitResult(true, listOf("克隆成功：$targetDir"))
+                }
+        } catch (e: Exception) {
+            LogManager.e(TAG, "clone 失败", e)
+            GitResult(false, error = friendlyError(e))
+        }
     }
 
-    suspend fun init(path: String): GitResult {
-        val r = run(path, "init", "-b", "main")
-        return if (r.success) r else run(path, "init")
+    // ─── git reset ────────────────────────────────────────────────────────
+
+    suspend fun reset(path: String, sha: String, mode: String = "mixed"): GitResult =
+        withContext(Dispatchers.IO) {
+            try {
+                openGit(path).use { git ->
+                    val resetType = when (mode.lowercase()) {
+                        "soft"  -> ResetCommand.ResetType.SOFT
+                        "hard"  -> ResetCommand.ResetType.HARD
+                        else    -> ResetCommand.ResetType.MIXED
+                    }
+                    git.reset().setMode(resetType).setRef(sha).call()
+                    LogManager.i(TAG, "reset --$mode $sha 成功")
+                    GitResult(true, listOf("reset --$mode ${sha.take(7)} 成功"))
+                }
+            } catch (e: Exception) {
+                LogManager.e(TAG, "reset 失败", e)
+                GitResult(false, error = e.message ?: "reset 失败")
+            }
+        }
+
+    // ─── 查询操作 ─────────────────────────────────────────────────────────
+
+    suspend fun currentBranch(path: String): String? = withContext(Dispatchers.IO) {
+        try {
+            openGit(path).use { git ->
+                git.repository.branch.also { LogManager.d(TAG, "branch: $it") }
+            }
+        } catch (e: Exception) { LogManager.w(TAG, "currentBranch 异常", e); null }
     }
 
-    suspend fun addAll(path: String): GitResult = run(path, "add", ".")
-
-    suspend fun commit(path: String, message: String,
-                       authorName: String = "GitMob", authorEmail: String = "gitmob@local"): GitResult {
-        run(path, "config", "user.email", authorEmail)
-        run(path, "config", "user.name", authorName)
-        return run(path, "commit", "-m", message)
+    suspend fun lastCommitMsg(path: String): String? = withContext(Dispatchers.IO) {
+        try {
+            openGit(path).use { git ->
+                val repo = git.repository
+                val headId = repo.resolve("HEAD") ?: return@withContext null
+                RevWalk(repo).use { walk ->
+                    val commit = walk.parseCommit(headId)
+                    val sha = commit.name.take(7)
+                    val msg = commit.shortMessage
+                    "$sha $msg"
+                }
+            }
+        } catch (e: Exception) { LogManager.w(TAG, "lastCommitMsg 异常", e); null }
     }
 
-    suspend fun push(path: String, remoteUrl: String, branch: String, token: String): GitResult {
-        val authed = injectToken(remoteUrl, token)
-        run(path, "remote", "set-url", "origin", authed)
-        val result = run(path, "push", "-u", "origin", branch)
-        run(path, "remote", "set-url", "origin", remoteUrl)
-        return result
+    suspend fun remoteUrl(path: String): String? = withContext(Dispatchers.IO) {
+        try {
+            openGit(path).use { git ->
+                git.repository.config
+                    .getString(ConfigConstants.CONFIG_REMOTE_SECTION, "origin",
+                        ConfigConstants.CONFIG_KEY_URL)
+            }
+        } catch (e: Exception) { null }
     }
 
-    suspend fun pull(path: String, token: String, branch: String = "HEAD"): GitResult {
-        val remoteResult = run(path, "remote", "get-url", "origin")
-        val remoteUrl = remoteResult.output.firstOrNull()
-            ?: return GitResult(false, emptyList(), "无远程地址")
-        val authed = injectToken(remoteUrl, token)
-        run(path, "remote", "set-url", "origin", authed)
-        val result = run(path, "pull", "origin", branch)
-        run(path, "remote", "set-url", "origin", remoteUrl)
-        return result
+    // ─── 兼容性 run() 接口（供 LocalRepoViewModel 调用）──────────────────
+
+    /**
+     * 通用命令兼容层，将 git 命令行风格的参数映射到 JGit API
+     * 支持：remote set-url / remote add / reset --soft/mixed/hard
+     */
+    suspend fun run(path: String, vararg args: String, useRoot: Boolean = false): GitResult =
+        withContext(Dispatchers.IO) {
+            try {
+                when {
+                    // git remote set-url origin <url>
+                    args.size >= 4
+                    && args[0] == "remote" && args[1] == "set-url" && args[2] == "origin" ->
+                        setRemoteUrlCmd(path, args[3])
+
+                    // git remote add origin <url>
+                    args.size >= 4
+                    && args[0] == "remote" && args[1] == "add" && args[2] == "origin" ->
+                        addRemoteCmd(path, args[3])
+
+                    // git reset --soft/mixed/hard <sha>
+                    args.size >= 3 && args[0] == "reset" -> {
+                        val mode = args[1].trimStart('-')
+                        val sha  = args[2]
+                        reset(path, sha, mode)
+                    }
+
+                    else -> {
+                        LogManager.w(TAG, "run() 未支持的命令: ${args.toList()}")
+                        GitResult(false, error = "不支持的 git 命令: ${args.toList()}")
+                    }
+                }
+            } catch (e: Exception) {
+                LogManager.e(TAG, "run() 异常", e)
+                GitResult(false, error = e.message ?: "执行失败")
+            }
+        }
+
+    // ─── 私有辅助 ─────────────────────────────────────────────────────────
+
+    private fun openGit(path: String): Git {
+        val gitDir = File(path, ".git")
+        val repo = RepositoryBuilder()
+            .setGitDir(if (gitDir.exists()) gitDir else null)
+            .setWorkTree(File(path))
+            .setMustExist(false)
+            .build()
+        return Git(repo)
     }
 
-    suspend fun clone(url: String, targetDir: String, token: String, useRoot: Boolean = false): GitResult {
-        val gitBin = findGitPath()
-        if (gitBin.isEmpty()) return NO_GIT
-        val authed    = injectToken(url, token)
-        val parentDir = File(targetDir).parent ?: "/"
-        val dirName   = File(targetDir).name
-        return run(parentDir, "clone", authed, dirName, useRoot = useRoot)
+    private fun setRemoteUrl(git: Git, url: String) {
+        val config = git.repository.config
+        config.setString(ConfigConstants.CONFIG_REMOTE_SECTION, "origin",
+            ConfigConstants.CONFIG_KEY_URL, url)
+        config.save()
     }
 
-    suspend fun currentBranch(path: String): String? {
-        val r = run(path, "rev-parse", "--abbrev-ref", "HEAD")
-        return r.output.firstOrNull()?.trim()
-    }
+    private suspend fun setRemoteUrlCmd(path: String, url: String): GitResult =
+        withContext(Dispatchers.IO) {
+            try {
+                openGit(path).use { git -> setRemoteUrl(git, url) }
+                GitResult(true, listOf("remote.origin.url=$url"))
+            } catch (e: Exception) {
+                GitResult(false, error = e.message ?: "set-url 失败")
+            }
+        }
 
-    suspend fun lastCommitMsg(path: String): String? {
-        val r = run(path, "log", "-1", "--oneline")
-        return r.output.firstOrNull()?.trim()
-    }
+    private suspend fun addRemoteCmd(path: String, url: String): GitResult =
+        withContext(Dispatchers.IO) {
+            try {
+                openGit(path).use { git ->
+                    val config = git.repository.config
+                    config.setString(ConfigConstants.CONFIG_REMOTE_SECTION, "origin",
+                        ConfigConstants.CONFIG_KEY_URL, url)
+                    config.setString(ConfigConstants.CONFIG_REMOTE_SECTION, "origin",
+                        "fetch", "+refs/heads/*:refs/remotes/origin/*")
+                    config.save()
+                }
+                GitResult(true, listOf("已添加 remote origin: $url"))
+            } catch (e: Exception) {
+                GitResult(false, error = e.message ?: "remote add 失败")
+            }
+        }
 
-    suspend fun remoteUrl(path: String): String? {
-        val r = run(path, "remote", "get-url", "origin")
-        return if (r.success) r.output.firstOrNull()?.trim() else null
-    }
+    private fun tokenCredentials(token: String) =
+        UsernamePasswordCredentialsProvider(token, "")
 
     fun injectToken(url: String, token: String): String {
         if (token.isBlank()) return url
@@ -210,4 +365,36 @@ object GitRunner {
             url.replace("https://github.com/", "https://$token@github.com/")
         else url
     }
+
+    /** 将 JGit 异常转换为用户友好的错误消息 */
+    private fun friendlyError(e: Exception): String {
+        val msg = e.message ?: e.javaClass.simpleName
+        return when {
+            msg.contains("not authorized", ignoreCase = true) ||
+            msg.contains("Authentication", ignoreCase = true) ->
+                "认证失败：请检查 GitHub Token 是否有效"
+            msg.contains("Repository not found", ignoreCase = true) ->
+                "仓库不存在或无权限访问"
+            msg.contains("Connection refused", ignoreCase = true) ||
+            msg.contains("UnknownHost", ignoreCase = true) ->
+                "网络连接失败，请检查网络"
+            msg.contains("rejected", ignoreCase = true) ->
+                "推送被拒绝（远程有新提交，请先 pull）"
+            else -> msg.take(200)
+        }
+    }
+}
+
+// ─── JGit 进度监听（输出到日志）────────────────────────────────────────────
+
+private class LogProgressMonitor : org.eclipse.jgit.lib.ProgressMonitor {
+    private val TAG = "JGitProgress"
+    override fun start(totalTasks: Int) {}
+    override fun beginTask(title: String, totalWork: Int) {
+        LogManager.d(TAG, "▶ $title")
+    }
+    override fun update(completed: Int) {}
+    override fun endTask() {}
+    override fun isCancelled() = false
+    override fun showDuration(enabled: Boolean) {}
 }

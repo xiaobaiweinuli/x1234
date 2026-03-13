@@ -236,3 +236,36 @@ data class GHMergeRequest(
     val head: String,
     @SerializedName("commit_message") val commitMessage: String,
 )
+
+// ─── Git Data API (用于服务端 Reset / Revert) ───────────────────────────────
+
+/** PATCH /repos/{owner}/{repo}/git/refs/heads/{branch} —— 强制移动分支指针（回滚） */
+data class GHUpdateRefRequest(
+    val sha: String,
+    val force: Boolean = false,
+)
+
+/** POST /repos/{owner}/{repo}/git/commits —— 创建新 commit（撤销 revert） */
+data class GHCreateCommitRequest(
+    val message: String,
+    val tree: String,           // tree SHA（parent 提交的 tree）
+    val parents: List<String>,  // 父提交 SHA 列表
+)
+
+/** 创建 commit 的响应 */
+data class GHCreateCommitResponse(
+    val sha: String,
+    val message: String,
+    @com.google.gson.annotations.SerializedName("html_url") val htmlUrl: String,
+)
+
+/** GET /repos/{owner}/{repo}/git/commits/{sha} —— 获取 Git 提交对象（含 tree） */
+data class GHGitCommit(
+    val sha: String,
+    val message: String,
+    val tree: GHGitTree,
+    val parents: List<GHGitParent>,
+)
+
+data class GHGitTree(val sha: String, val url: String)
+data class GHGitParent(val sha: String, val url: String)

@@ -26,7 +26,18 @@ data class RepoDetailState(
     val selectedCommit: GHCommitFull? = null,
     val commitDetailLoading: Boolean = false,
     val selectedFilePatch: Pair<String,String>? = null,  // filename to patch
+    // Reset / Revert 操作状态
+    val gitOpInProgress: Boolean = false,   // 操作进行中（显示 loading）
+    val gitOpResult: GitOpResult? = null,   // 操作结果（成功/失败弹窗）
     val toast: String? = null,
+)
+
+/** Reset / Revert 操作结果 */
+data class GitOpResult(
+    val success: Boolean,
+    val opName: String,       // "回滚" / "撤销"
+    val detail: String,       // 成功/失败详情
+    val newSha: String? = null,
 )
 
 class RepoDetailViewModel(app: Application, savedStateHandle: SavedStateHandle) : AndroidViewModel(app) {
@@ -164,6 +175,74 @@ class RepoDetailViewModel(app: Application, savedStateHandle: SavedStateHandle) 
 
     fun closeFilePatch() = _state.update { it.copy(selectedFilePatch = null) }
     fun clearToast() = _state.update { it.copy(toast = null) }
+    fun clearGitOpResult() = _state.update { it.copy(gitOpResult = null) }
+
+    /**
+     * 回滚：强制将当前分支的 HEAD 指向目标 SHA（服务端操作，重写历史）
+     * 等同于 git reset --hard <sha> && git push -f origin <branch>
+     */
+    fun resetToCommit(sha: String) = viewModelScope.launch {
+        val branch = _state.value.currentBranch.ifBlank { return@launch }
+        _state.update { it.copy(gitOpInProgress = true) }
+        try {
+            repository.resetBranchToCommit(owner, repoName, branch, sha)
+            // 失效缓存，重新加载提交列表
+            repository.invalidateCommitCache(owner, repoName, branch)
+            loadCommits(branch)
+            _state.update {
+                it.copy(
+                    gitOpInProgress = false,
+                    gitOpResult = GitOpResult(true, "回滚", "分支 $branch 已回滚到 ${sha.take(7)}"),
+                    selectedCommit  = null,
+                )
+            }
+        } catch (e: Exception) {
+            _state.update {
+                it.copy(
+                    gitOpInProgress = false,
+                    gitOpResult = GitOpResult(false, "回滚", e.message ?: "回滚失败"),
+                )
+            }
+        }
+    }
+
+    /**
+     * 撤销（Revert）：在当前 HEAD 上创建一个新的 revert commit
+     * 不重写历史，安全用于受保护分支
+     */
+    fun revertCommit(targetSha: String, commitMessage: String) = viewModelScope.launch {
+        val branch = _state.value.currentBranch.ifBlank { return@launch }
+        // 获取当前 HEAD SHA（从分支列表取）
+        val headSha = _state.value.branches
+            .find { it.name == branch }?.commit?.sha
+            ?: return@launch
+        _state.update { it.copy(gitOpInProgress = true) }
+        try {
+            val result = repository.revertCommit(
+                owner, repoName, branch, targetSha, headSha, commitMessage,
+            )
+            repository.invalidateCommitCache(owner, repoName, branch)
+            loadCommits(branch)
+            _state.update {
+                it.copy(
+                    gitOpInProgress = false,
+                    gitOpResult = GitOpResult(
+                        true, "撤销",
+                        "已创建 revert commit ${result.sha.take(7)}",
+                        newSha = result.sha,
+                    ),
+                    selectedCommit = null,
+                )
+            }
+        } catch (e: Exception) {
+            _state.update {
+                it.copy(
+                    gitOpInProgress = false,
+                    gitOpResult = GitOpResult(false, "撤销", e.message ?: "撤销失败"),
+                )
+            }
+        }
+    }
 
     companion object {
         fun factory(owner: String, repo: String): androidx.lifecycle.ViewModelProvider.Factory =

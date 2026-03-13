@@ -240,12 +240,11 @@ class LocalRepoViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun hideClonePicker() = _state.update { it.copy(showClonePicker = false, pendingCloneUrl = "") }
 
-    /** git reset --soft/mixed/hard <sha> */
+    /** git reset --soft/mixed/hard <sha>（JGit 原生实现） */
     fun gitReset(repoId: String, sha: String, mode: String = "mixed") = viewModelScope.launch {
         val repo = _state.value.repos.find { it.id == repoId } ?: return@launch
         try {
-            val flag = "--$mode"
-            val result = GitRunner.run(repo.path, "reset", flag, sha)
+            val result = GitRunner.reset(repo.path, sha, mode)
             if (result.success) {
                 // 刷新状态
                 val branch = GitRunner.currentBranch(repo.path)

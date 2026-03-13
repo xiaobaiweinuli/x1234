@@ -51,8 +51,8 @@ data class BookmarkPath(
     val isCustom: Boolean = false,
 )
 
-/** 根据 iconKey 解析出实际图标 */
-fun BookmarkPath.resolveIcon(): ImageVector = when (iconKey) {
+/** 根据 iconKey 解析出实际图标（空值/未知 key 均返回 Folder 兜底，防止 NPE） */
+fun BookmarkPath.resolveIcon(): ImageVector = when (iconKey.orEmpty()) {
     "SdCard"         -> Icons.Default.SdCard
     "Download"       -> Icons.Default.Download
     "Terminal"       -> Icons.Default.Terminal

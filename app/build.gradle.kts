@@ -55,7 +55,25 @@ android {
         compose = true
         buildConfig = true
     }
-}
+    // JGit 带有 META-INF 签名文件，需要排除以避免打包冲突
+    packaging {
+        resources {
+            excludes += setOf(
+                "META-INF/LICENSE",
+                "META-INF/LICENSE.md",
+                "META-INF/LICENSE.txt",
+                "META-INF/NOTICE",
+                "META-INF/NOTICE.md",
+                "META-INF/NOTICE.txt",
+                "META-INF/DEPENDENCIES",
+                "META-INF/*.SF",
+                "META-INF/*.RSA",
+                "META-INF/*.DSA",
+                "META-INF/services/org.eclipse.jgit.*",
+                "mozilla/public-suffix-list.txt",
+            )
+        }
+    }
 
 dependencies {
     implementation(libs.androidx.core.ktx)
@@ -82,5 +100,8 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.libsu.core)
     implementation(libs.libsu.service)
+    // JGit：纯 Java Git 实现，无需外部 git 可执行文件
+    implementation(libs.jgit)
+    implementation(libs.jgit.apache.http)
     debugImplementation(libs.androidx.ui.tooling)
 }

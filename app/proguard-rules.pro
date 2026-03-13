@@ -25,3 +25,13 @@
 # Kotlin Coroutines
 -keepnames class kotlinx.coroutines.internal.MainDispatcherFactory {}
 -keepnames class kotlinx.coroutines.CoroutineExceptionHandler {}
+
+# JGit
+-keep class org.eclipse.jgit.** { *; }
+-dontwarn org.eclipse.jgit.**
+-dontwarn org.slf4j.**
+-dontwarn org.apache.http.**
+-dontwarn org.apache.commons.**
+-dontwarn com.jcraft.jsch.**
+-keep class org.bouncycastle.** { *; }
+-dontwarn org.bouncycastle.**

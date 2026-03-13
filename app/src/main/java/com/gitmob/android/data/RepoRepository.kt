@@ -35,6 +35,10 @@ class RepoRepository {
         repos
     }
 
+    fun invalidateCommitCache(owner: String, repo: String, sha: String) {
+        commitCache.remove("$owner/$repo/$sha")
+    }
+
     fun invalidateReposCache() {
         reposCache = null
         reposCacheTime = 0
@@ -142,6 +146,48 @@ class RepoRepository {
 
     suspend fun unstarRepo(owner: String, repo: String) = withContext(Dispatchers.IO) {
         api.unstarRepo(owner, repo)
+    }
+
+    // ─── 服务端 Reset / Revert（通过 GitHub Git Data API，无需本地 git）──────
+
+    /**
+     * 回滚：强制将分支指针移动到目标 SHA（等同于 git reset --hard + git push -f）
+     * ⚠ 会重写提交历史，之后的提交从该分支消失
+     */
+    suspend fun resetBranchToCommit(
+        owner: String, repo: String, branch: String, sha: String,
+    ) = withContext(Dispatchers.IO) {
+        api.updateRef(owner, repo, branch, GHUpdateRefRequest(sha, force = true))
+    }
+
+    /**
+     * 撤销（Revert）：在当前 HEAD 上创建一个新提交，将内容恢复到目标提交的父提交状态。
+     * 不重写历史，保留所有提交记录，适合有保护规则的主分支。
+     *
+     * 步骤：
+     *  1. 获取目标提交的父 SHA
+     *  2. 获取父提交的 tree SHA（文件快照）
+     *  3. 以当前 HEAD 为 parent，用父提交的 tree 创建新 commit
+     *  4. 快进更新分支指针
+     */
+    suspend fun revertCommit(
+        owner: String, repo: String, branch: String,
+        targetSha: String, currentHeadSha: String, message: String,
+    ): GHCreateCommitResponse = withContext(Dispatchers.IO) {
+        val targetGit = api.getGitCommit(owner, repo, targetSha)
+        val parentSha = targetGit.parents.firstOrNull()?.sha
+            ?: error("该提交没有父提交（初始提交），无法 revert")
+        val parentGit = api.getGitCommit(owner, repo, parentSha)
+        val newCommit = api.createCommit(
+            owner, repo,
+            GHCreateCommitRequest(
+                message = message,
+                tree    = parentGit.tree.sha,
+                parents = listOf(currentHeadSha),
+            )
+        )
+        api.updateRef(owner, repo, branch, GHUpdateRefRequest(newCommit.sha, force = false))
+        newCommit
     }
 
     // ─── PR / Issues ───
