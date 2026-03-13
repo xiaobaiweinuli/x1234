@@ -49,7 +49,7 @@ class RepoListViewModel(app: Application) : AndroidViewModel(app) {
             tokenStorage.userProfile.collect { profile ->
                 if (profile != null) {
                     _state.update { it.copy(userLogin = profile.first,
-                        userAvatar = thumbUrl(profile.third)) }
+                        userAvatar = thumbUrl(profile.third).orEmpty()) }
                     loadOrgs()
                 }
             }

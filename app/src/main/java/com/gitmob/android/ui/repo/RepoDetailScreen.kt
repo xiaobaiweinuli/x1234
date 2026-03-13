@@ -417,7 +417,6 @@ fun IssuesTab(issues: List<GHIssue>, c: GmColors) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-@OptIn(ExperimentalMaterial3Api::class)
 fun CommitDetailSheet(
     commit: GHCommitFull,
     c: GmColors,
