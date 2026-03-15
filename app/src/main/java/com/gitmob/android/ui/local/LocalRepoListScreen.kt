@@ -23,8 +23,6 @@ import androidx.compose.ui.unit.sp
 import com.gitmob.android.local.LocalRepo
 import com.gitmob.android.local.LocalRepoStatus
 import com.gitmob.android.ui.common.*
-import com.gitmob.android.ui.filepicker.FilePickerScreen
-import com.gitmob.android.ui.filepicker.PickerMode
 import com.gitmob.android.ui.theme.*
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -32,160 +30,82 @@ import com.gitmob.android.ui.theme.*
 fun LocalRepoListScreen(
     rootEnabled: Boolean,
     vm: LocalRepoViewModel,
+    onShowNewProjectPicker: () -> Unit = {},
 ) {
     val c = LocalGmColors.current
     val state by vm.state.collectAsState()
     val wizardStep by vm.wizardStep.collectAsState()
     val customBookmarks by vm.customBookmarks.collectAsState()
-    var newProjectDialog by remember { mutableStateOf(false) }
-    var newProjectName by remember { mutableStateOf("") }
-    var showNewProjectPicker by remember { mutableStateOf(false) }
-    var newProjectParentDir by remember { mutableStateOf("") }
     var wizardRepo by remember { mutableStateOf<LocalRepo?>(null) }
 
     state.toast?.let { msg ->
         LaunchedEffect(msg) { kotlinx.coroutines.delay(2500); vm.clearToast() }
     }
 
-    // 文件选择器覆盖层（导入目录）
-    if (state.showFilePicker) {
-        FilePickerScreen(
-            title = "导入本地目录",
-            mode = PickerMode.DIRECTORY,
-            rootEnabled = rootEnabled,
-            customBookmarks = customBookmarks,
-            onAddBookmark    = { bm -> vm.addBookmark(bm) },
-            onRemoveBookmark = { bm -> vm.removeBookmark(bm) },
-            onConfirm = { path, _ -> vm.importDirectory(path) },
-            onDismiss = vm::hideFilePicker,
-        )
-        return
-    }
-
-    // 新建本地项目：先选父目录
-    if (showNewProjectPicker) {
-        FilePickerScreen(
-            title = "选择项目父目录",
-            mode = PickerMode.DIRECTORY,
-            rootEnabled = rootEnabled,
-            customBookmarks = customBookmarks,
-            onAddBookmark    = { bm -> vm.addBookmark(bm) },
-            onRemoveBookmark = { bm -> vm.removeBookmark(bm) },
-            onConfirm = { path, _ ->
-                newProjectParentDir = path
-                showNewProjectPicker = false
-                newProjectDialog = true
-            },
-            onDismiss = { showNewProjectPicker = false },
-        )
-        return
-    }
-
-    Scaffold(
-        containerColor = c.bgDeep,
-        topBar = {
-            TopAppBar(
-                title = { Text("本地仓库", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = c.textPrimary) },
-                actions = {
-                    // 新建本地项目
-                    IconButton(onClick = { showNewProjectPicker = true }) {
-                        Icon(Icons.Default.CreateNewFolder, null, tint = Coral)
-                    }
-                    // 导入已有目录
-                    IconButton(onClick = vm::showFilePicker) {
-                        Icon(Icons.Default.FolderOpen, null, tint = c.textSecondary)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = c.bgDeep),
-            )
-        },
-        snackbarHost = {
-            state.toast?.let {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
-                    Snackbar(modifier = Modifier.padding(16.dp),
-                        containerColor = c.bgCard, contentColor = c.textPrimary) { Text(it) }
-                }
-            }
-        },
-    ) { padding ->
-        if (state.repos.isEmpty()) {
-            EmptyLocalState(
-                c = c,
-                onImport = vm::showFilePicker,
-                onNew = { showNewProjectPicker = true },
-            )
-        } else {
-            LazyColumn(
-                modifier = Modifier.padding(padding),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                items(state.repos, key = { it.id }) { repo ->
-                    LocalRepoCard(
-                        repo = repo, c = c,
-                        onPush = { wizardRepo = repo; vm.startPushWizard(repo.id) },
-                        onPull = { vm.pull(repo.id) },
-                        onScan = { vm.scanRepo(repo.id) },
-                        onRemove = { vm.removeRepo(repo.id) },
-                    )
-                }
-            }
-        }
-    }
-
-    // 推送向导
-    wizardRepo?.let { repo ->
-        if (wizardStep !is PushWizardStep.None) {
-            GitOperationSheet(
-                repo = repo,
-                wizardStep = wizardStep,
-                onPush = { url, msg, branch -> vm.executePush(repo.id, url, msg, branch) },
-                onDismiss = { vm.dismissWizard(); wizardRepo = null },
-            )
-        }
-    }
-
-    // 新建项目对话框
-    if (newProjectDialog) {
-        AlertDialog(
-            onDismissRequest = { newProjectDialog = false },
-            containerColor = c.bgCard,
-            title = { Text("新建本地项目", color = c.textPrimary, fontWeight = FontWeight.SemiBold) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("父目录：$newProjectParentDir",
-                        fontSize = 11.sp, color = c.textTertiary, fontFamily = FontFamily.Monospace)
-                    OutlinedTextField(
-                        value = newProjectName, onValueChange = { newProjectName = it },
-                        singleLine = true, modifier = Modifier.fillMaxWidth(),
-                        label = { Text("项目名称") },
-                        placeholder = { Text("my-project", color = c.textTertiary) },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Coral, unfocusedBorderColor = c.border,
-                            focusedTextColor = c.textPrimary, unfocusedTextColor = c.textPrimary,
-                            focusedContainerColor = c.bgItem, unfocusedContainerColor = c.bgItem,
-                            focusedLabelColor = Coral, unfocusedLabelColor = c.textTertiary,
-                        ),
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        if (newProjectName.isNotBlank()) {
-                            vm.createLocalProject(newProjectParentDir, newProjectName)
-                            newProjectDialog = false
-                            newProjectName = ""
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            containerColor = c.bgDeep,
+            topBar = {
+                TopAppBar(
+                    title = { Text("本地仓库", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = c.textPrimary) },
+                    actions = {
+                        // 新建本地项目
+                        IconButton(onClick = onShowNewProjectPicker) {
+                            Icon(Icons.Default.CreateNewFolder, null, tint = Coral)
+                        }
+                        // 导入已有目录
+                        IconButton(onClick = vm::showFilePicker) {
+                            Icon(Icons.Default.FolderOpen, null, tint = c.textSecondary)
                         }
                     },
-                    enabled = newProjectName.isNotBlank(),
-                    colors = ButtonDefaults.buttonColors(containerColor = Coral),
-                ) { Text("创建 & Init") }
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = c.bgDeep),
+                )
             },
-            dismissButton = {
-                TextButton(onClick = { newProjectDialog = false }) { Text("取消", color = c.textSecondary) }
+            snackbarHost = {
+                state.toast?.let {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+                        Snackbar(modifier = Modifier.padding(16.dp),
+                            containerColor = c.bgCard, contentColor = c.textPrimary) { Text(it) }
+                    }
+                }
             },
-        )
+        ) { padding ->
+            if (state.repos.isEmpty()) {
+                EmptyLocalState(
+                    c = c,
+                    onImport = vm::showFilePicker,
+                    onNew = onShowNewProjectPicker,
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier.padding(padding),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(state.repos, key = { it.id }) { repo ->
+                        LocalRepoCard(
+                            repo = repo, c = c,
+                            onPush = { wizardRepo = repo; vm.startPushWizard(repo.id) },
+                            onPull = { vm.pull(repo.id) },
+                            onScan = { vm.scanRepo(repo.id) },
+                            onRemove = { vm.removeRepo(repo.id) },
+                        )
+                    }
+                }
+            }
+        }
+
+        // 推送向导
+        wizardRepo?.let { repo ->
+            if (wizardStep !is PushWizardStep.None) {
+                GitOperationSheet(
+                    repo = repo,
+                    wizardStep = wizardStep,
+                    onPush = { url, msg, branch -> vm.executePush(repo.id, url, msg, branch) },
+                    onDismiss = { vm.dismissWizard(); wizardRepo = null },
+                )
+            }
+        }
     }
 }
 

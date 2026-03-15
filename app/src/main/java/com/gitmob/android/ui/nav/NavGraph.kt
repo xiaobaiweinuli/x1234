@@ -197,22 +197,11 @@ private fun MainScreen(
         // 观察共享 VM 的克隆状态，在此层级弹出文件选择器
         val vmState by localVm.state.collectAsState()
         val vmBookmarks by localVm.customBookmarks.collectAsState()
-
-        // 克隆文件选择器：提升到 MainScreen 层级，不依赖 Tab 是否活跃
-        if (vmState.showClonePicker) {
-            FilePickerScreen(
-                title = "选择克隆目标目录",
-                mode = PickerMode.DIRECTORY,
-                rootEnabled = rootEnabled,
-                customBookmarks = vmBookmarks,
-                onAddBookmark    = { bm -> localVm.addBookmark(bm) },
-                onRemoveBookmark = { bm -> localVm.removeBookmark(bm) },
-                onConfirm = { path, _ ->
-                    localVm.cloneRepo(vmState.pendingCloneUrl, path)
-                },
-                onDismiss = localVm::hideClonePicker,
-            )
-        } else {
+        
+        var showNewProjectPicker by remember { mutableStateOf(false) }
+        var newProjectParentDir by remember { mutableStateOf("") }
+        var newProjectDialog by remember { mutableStateOf(false) }
+        var newProjectName by remember { mutableStateOf("") }
 
         // 上部内容区域（Tab 页面各自有自己的 Scaffold + TopAppBar）
         Box(modifier = Modifier.weight(1f)) {
@@ -228,7 +217,11 @@ private fun MainScreen(
                     )
                 }
                 composable(BottomTab.Local.route) {
-                    LocalRepoListScreen(rootEnabled = rootEnabled, vm = localVm)
+                    LocalRepoListScreen(
+                        rootEnabled = rootEnabled, 
+                        vm = localVm,
+                        onShowNewProjectPicker = { showNewProjectPicker = true }
+                    )
                 }
                 composable(BottomTab.Settings.route) {
                     val settingsScope = rememberCoroutineScope()
@@ -249,6 +242,98 @@ private fun MainScreen(
                     )
                 }
             }
+            
+            // 导入目录文件选择器：覆盖层显示在 Tab 内容之上
+            if (vmState.showFilePicker) {
+                FilePickerScreen(
+                    title = "导入本地目录",
+                    mode = PickerMode.DIRECTORY,
+                    rootEnabled = rootEnabled,
+                    customBookmarks = vmBookmarks,
+                    onAddBookmark    = { bm -> localVm.addBookmark(bm) },
+                    onRemoveBookmark = { bm -> localVm.removeBookmark(bm) },
+                    onConfirm = { path, _ -> localVm.importDirectory(path) },
+                    onDismiss = localVm::hideFilePicker,
+                )
+            }
+            
+            // 新建项目父目录选择器：覆盖层显示在 Tab 内容之上
+            if (showNewProjectPicker) {
+                FilePickerScreen(
+                    title = "选择项目父目录",
+                    mode = PickerMode.DIRECTORY,
+                    rootEnabled = rootEnabled,
+                    customBookmarks = vmBookmarks,
+                    onAddBookmark    = { bm -> localVm.addBookmark(bm) },
+                    onRemoveBookmark = { bm -> localVm.removeBookmark(bm) },
+                    onConfirm = { path, _ ->
+                        newProjectParentDir = path
+                        showNewProjectPicker = false
+                        newProjectDialog = true
+                    },
+                    onDismiss = { showNewProjectPicker = false },
+                )
+            }
+            
+            // 克隆文件选择器：覆盖层显示在 Tab 内容之上
+            if (vmState.showClonePicker) {
+                FilePickerScreen(
+                    title = "选择克隆目标目录",
+                    mode = PickerMode.DIRECTORY,
+                    rootEnabled = rootEnabled,
+                    customBookmarks = vmBookmarks,
+                    onAddBookmark    = { bm -> localVm.addBookmark(bm) },
+                    onRemoveBookmark = { bm -> localVm.removeBookmark(bm) },
+                    onConfirm = { path, _ ->
+                        localVm.cloneRepo(vmState.pendingCloneUrl, path)
+                    },
+                    onDismiss = localVm::hideClonePicker,
+                )
+            }
+            
+            // 新建项目对话框
+            val c = LocalGmColors.current
+            if (newProjectDialog) {
+                AlertDialog(
+                    onDismissRequest = { newProjectDialog = false },
+                    containerColor = c.bgCard,
+                    title = { Text("新建本地项目", color = c.textPrimary, fontWeight = FontWeight.SemiBold) },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text("父目录：$newProjectParentDir",
+                                fontSize = 11.sp, color = c.textTertiary, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+                            OutlinedTextField(
+                                value = newProjectName, onValueChange = { newProjectName = it },
+                                singleLine = true, modifier = Modifier.fillMaxWidth(),
+                                label = { Text("项目名称") },
+                                placeholder = { Text("my-project", color = c.textTertiary) },
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = Coral, unfocusedBorderColor = c.border,
+                                    focusedTextColor = c.textPrimary, unfocusedTextColor = c.textPrimary,
+                                    focusedContainerColor = c.bgItem, unfocusedContainerColor = c.bgItem,
+                                    focusedLabelColor = Coral, unfocusedLabelColor = c.textTertiary,
+                                ),
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                if (newProjectName.isNotBlank()) {
+                                    localVm.createLocalProject(newProjectParentDir, newProjectName)
+                                    newProjectDialog = false
+                                    newProjectName = ""
+                                }
+                            },
+                            enabled = newProjectName.isNotBlank(),
+                            colors = ButtonDefaults.buttonColors(containerColor = Coral),
+                        ) { Text("创建 & Init") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { newProjectDialog = false }) { Text("取消", color = c.textSecondary) }
+                    },
+                )
+            }
         }
 
         // 底部导航栏（固定在 Column 底部，不参与 Scaffold inset 计算）
@@ -262,7 +347,9 @@ private fun MainScreen(
                     selected = currentRoute == tab.route,
                     onClick = {
                         tabNavController.navigate(tab.route) {
-                            popUpTo(tabNavController.graph.startDestinationId) { saveState = true }
+                            popUpTo(tabNavController.graph.startDestinationId) {
+                                saveState = true
+                            }
                             launchSingleTop = true
                             restoreState = true
                         }
@@ -279,7 +366,6 @@ private fun MainScreen(
                 )
             }
         }
-        } // end else (not cloning)
     }
 }
 

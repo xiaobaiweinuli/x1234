@@ -17,6 +17,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -377,7 +378,7 @@ fun AboutDialog(onDismiss: () -> Unit) {
             // 社区
             AboutSection(title = "社区", c = c) {
                 AboutLinkRow(
-                    icon = Icons.Default.Send,
+                    icon = Icons.AutoMirrored.Filled.Send,
                     label = "Telegram 群组",
                     sub = "t.me/MyResNav",
                     url = "https://t.me/MyResNav",

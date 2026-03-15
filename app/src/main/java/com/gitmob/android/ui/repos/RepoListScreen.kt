@@ -423,7 +423,7 @@ private fun DeleteRepoDialog(
         title = { Text("删除仓库", color = c.textPrimary, fontWeight = FontWeight.SemiBold) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                // 仓库标识 + 快速复制区
+                // 仓库标识，点击全名复制「仓库名」并自动填入下面的输入框
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -432,40 +432,33 @@ private fun DeleteRepoDialog(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(Icons.Default.FolderDelete, null,
-                        tint = RedColor, modifier = Modifier.size(16.dp))
+                    Icon(
+                        Icons.Default.FolderDelete,
+                        null,
+                        tint = RedColor,
+                        modifier = Modifier.size(16.dp),
+                    )
                     Text(
                         fullName,
-                        fontSize = 13.sp, color = c.textPrimary,
+                        fontSize = 13.sp,
+                        color = c.textPrimary,
                         fontWeight = FontWeight.Medium,
                         fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.weight(1f),
-                    )
-                    // 快速复制按钮组
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        // 复制仓库名
-                        SmallCopyChip(
-                            label = repoName,
-                            tooltip = "复制仓库名",
-                            c = c,
-                            onClick = {
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable {
+                                // 点击整行 owner/repo 文本，复制「仓库名」并自动填充输入框
                                 copyToClipboard(repoName, "repoName")
-                                input = repoName   // 自动填入输入框
+                                input = repoName
                             },
-                        )
-                        // 复制完整路径 owner/repo
-                        SmallCopyChip(
-                            label = "全名",
-                            tooltip = "复制 $fullName",
-                            c = c,
-                            onClick = { copyToClipboard(fullName, "fullName") },
-                        )
-                    }
+                    )
                 }
 
                 Text(
                     "此操作不可撤销。请在下方输入仓库名确认删除：",
-                    fontSize = 13.sp, color = c.textSecondary, lineHeight = 20.sp,
+                    fontSize = 13.sp,
+                    color = c.textSecondary,
+                    lineHeight = 20.sp,
                 )
 
                 OutlinedTextField(
@@ -515,44 +508,6 @@ private fun DeleteRepoDialog(
             TextButton(onClick = onDismiss) { Text("取消", color = c.textSecondary) }
         },
     )
-}
-
-/** 小型复制标签按钮 */
-@Composable
-private fun SmallCopyChip(label: String, tooltip: String, c: GmColors, onClick: () -> Unit) {
-    var copied by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-    Surface(
-        onClick = {
-            onClick()
-            copied = true
-            scope.launch {
-                kotlinx.coroutines.delay(1500)
-                copied = false
-            }
-        },
-        shape  = RoundedCornerShape(6.dp),
-        color  = if (copied) GreenDim else c.bgActive,
-        modifier = Modifier.padding(0.dp),
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(3.dp),
-        ) {
-            Icon(
-                if (copied) Icons.Default.Check else Icons.Default.ContentCopy,
-                contentDescription = tooltip,
-                tint     = if (copied) Green else c.textTertiary,
-                modifier = Modifier.size(11.dp),
-            )
-            Text(
-                if (copied) "已复制" else label,
-                fontSize = 10.sp,
-                color    = if (copied) Green else c.textTertiary,
-            )
-        }
-    }
 }
 
 @Composable

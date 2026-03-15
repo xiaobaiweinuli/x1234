@@ -2,6 +2,7 @@ package com.gitmob.android
 
 import android.app.Application
 import com.gitmob.android.api.ApiClient
+import com.gitmob.android.auth.RootManager
 import com.gitmob.android.auth.TokenStorage
 import com.gitmob.android.util.CrashHandler
 import com.gitmob.android.util.LogManager
@@ -28,6 +29,18 @@ class GitMobApp : Application() {
             LogManager.init(this@GitMobApp, level)
         }
         ApiClient.init(tokenStorage)
+        // 3. 如果之前启用了 root 权限，自动尝试恢复
+        appScope.launch {
+            val rootEnabled = tokenStorage.rootEnabled.first()
+            if (rootEnabled) {
+                try {
+                    LogManager.i("App", "尝试自动恢复 root 权限")
+                    RootManager.requestRoot()
+                } catch (e: Exception) {
+                    LogManager.e("App", "自动恢复 root 权限失败", e)
+                }
+            }
+        }
         LogManager.i("App", "GitMob 启动")
         instance = this
     }

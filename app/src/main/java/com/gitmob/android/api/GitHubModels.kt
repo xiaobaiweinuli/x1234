@@ -193,6 +193,12 @@ data class GHUpdateRepoRequest(
     @SerializedName("default_branch") val defaultBranch: String? = null,
 )
 
+/** 仓库转移请求体 */
+data class GHTransferRepoRequest(
+    @SerializedName("new_owner") val newOwner: String,
+    @SerializedName("new_name") val newName: String? = null,
+)
+
 // ── Topics ──
 data class GHTopics(
     val names: List<String>,
@@ -269,3 +275,103 @@ data class GHGitCommit(
 
 data class GHGitTree(val sha: String, val url: String)
 data class GHGitParent(val sha: String, val url: String)
+
+// ── GitHub Actions ─────────────────────────────────────────────
+
+data class WorkflowInput(
+    val name: String,
+    val type: String,
+    val description: String?,
+    val required: Boolean,
+    val default: Any?,
+    val options: List<String>? = null,
+)
+
+data class GHWorkflow(
+    val id: Long,
+    val name: String,
+    val path: String,
+    val state: String,
+    @SerializedName("created_at") val createdAt: String,
+    @SerializedName("updated_at") val updatedAt: String,
+    @SerializedName("html_url") val htmlUrl: String,
+)
+
+data class GHWorkflowRun(
+    val id: Long,
+    val name: String?,
+    @SerializedName("display_title") val displayTitle: String?,
+    val status: String?,
+    val conclusion: String?,
+    @SerializedName("created_at") val createdAt: String,
+    @SerializedName("updated_at") val updatedAt: String?,
+    @SerializedName("run_started_at") val runStartedAt: String?,
+    @SerializedName("html_url") val htmlUrl: String,
+    @SerializedName("workflow_id") val workflowId: Long,
+    @SerializedName("head_branch") val headBranch: String?,
+    @SerializedName("head_sha") val headSha: String?,
+    val actor: GHOwner?,
+    val path: String?,
+    @SerializedName("run_number") val runNumber: Int?,
+    val event: String?,
+)
+
+data class GHWorkflowJob(
+    val id: Long,
+    val name: String?,
+    val status: String?,
+    val conclusion: String?,
+    @SerializedName("created_at") val createdAt: String,
+    @SerializedName("started_at") val startedAt: String?,
+    @SerializedName("completed_at") val completedAt: String?,
+    @SerializedName("html_url") val htmlUrl: String,
+    val steps: List<GHWorkflowStep>?,
+)
+
+data class GHWorkflowStep(
+    val name: String?,
+    val status: String?,
+    val conclusion: String?,
+    val number: Int,
+    @SerializedName("started_at") val startedAt: String?,
+    @SerializedName("completed_at") val completedAt: String?,
+)
+
+data class GHWorkflowDispatchRequest(
+    val ref: String,
+    val inputs: Map<String, Any>? = null,
+)
+
+data class GHWorkflowInput(
+    val type: String,
+    val description: String?,
+    val default: Any?,
+    val required: Boolean = false,
+    val options: List<String>? = null,
+)
+
+data class GHWorkflowFile(
+    val name: String,
+    val content: String,
+)
+
+data class GHActionsListResponse<T>(
+    @SerializedName("total_count") val totalCount: Int,
+    val workflowRuns: List<T>? = null,
+    val workflows: List<T>? = null,
+)
+
+data class GHWorkflowsResponse(
+    @SerializedName("total_count") val totalCount: Int,
+    val workflows: List<GHWorkflow>,
+)
+
+data class GHWorkflowRunsResponse(
+    @SerializedName("total_count") val totalCount: Int,
+    @SerializedName("workflow_runs") val workflowRuns: List<GHWorkflowRun>,
+)
+
+data class GHWorkflowJobsResponse(
+    @SerializedName("total_count") val totalCount: Int,
+    val jobs: List<GHWorkflowJob>,
+)

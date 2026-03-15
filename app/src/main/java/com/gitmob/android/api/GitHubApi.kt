@@ -126,6 +126,13 @@ interface GitHubApi {
         @Query("per_page") perPage: Int = 30,
     ): List<GHIssue>
 
+    @DELETE("repos/{owner}/{repo}/issues/{issueNumber}")
+    suspend fun deleteIssue(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("issueNumber") issueNumber: Int,
+    ): Response<Unit>
+
     // ── Releases ──
     @GET("repos/{owner}/{repo}/releases")
     suspend fun getReleases(
@@ -187,6 +194,14 @@ interface GitHubApi {
         @Path("owner") owner: String,
         @Path("repo") repo: String,
         @Body body: GHUpdateRepoRequest,
+    ): GHRepo
+
+    // ── Repo transfer ──
+    @POST("repos/{owner}/{repo}/transfer")
+    suspend fun transferRepo(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Body body: GHTransferRepoRequest,
     ): GHRepo
 
     // ── Topics ──
@@ -255,4 +270,70 @@ interface GitHubApi {
         @Path("owner") owner: String,
         @Path("repo") repo: String,
     ): retrofit2.Response<GHRepo>
+
+    // ── GitHub Actions ──
+    @GET("repos/{owner}/{repo}/actions/workflows")
+    suspend fun getWorkflows(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Query("per_page") perPage: Int = 30,
+    ): GHWorkflowsResponse
+
+    @GET("repos/{owner}/{repo}/actions/runs")
+    suspend fun getWorkflowRuns(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Query("per_page") perPage: Int = 30,
+    ): GHWorkflowRunsResponse
+
+    @GET("repos/{owner}/{repo}/actions/workflows/{workflowId}/runs")
+    suspend fun getWorkflowRunsForWorkflow(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("workflowId") workflowId: Long,
+        @Query("per_page") perPage: Int = 30,
+    ): GHWorkflowRunsResponse
+
+    @GET("repos/{owner}/{repo}/actions/runs/{runId}/jobs")
+    suspend fun getWorkflowJobs(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("runId") runId: Long,
+    ): GHWorkflowJobsResponse
+
+    @POST("repos/{owner}/{repo}/actions/workflows/{workflowId}/dispatches")
+    suspend fun dispatchWorkflow(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("workflowId") workflowId: Long,
+        @Body body: GHWorkflowDispatchRequest,
+    ): Response<Unit>
+
+    @DELETE("repos/{owner}/{repo}/actions/runs/{runId}")
+    suspend fun deleteWorkflowRun(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("runId") runId: Long,
+    ): Response<Unit>
+
+    @POST("repos/{owner}/{repo}/actions/runs/{runId}/rerun")
+    suspend fun rerunWorkflow(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("runId") runId: Long,
+    ): Response<Unit>
+
+    @POST("repos/{owner}/{repo}/actions/runs/{runId}/cancel")
+    suspend fun cancelWorkflow(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("runId") runId: Long,
+    ): Response<Unit>
+
+    @GET("repos/{owner}/{repo}/actions/runs/{runId}/logs")
+    suspend fun getWorkflowLogs(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("runId") runId: Long,
+    ): Response<okhttp3.ResponseBody>
 }

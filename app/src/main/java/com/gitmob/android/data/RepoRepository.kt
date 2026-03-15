@@ -1,9 +1,15 @@
 package com.gitmob.android.data
 
 import android.util.Base64
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory
+import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import com.gitmob.android.api.*
+import com.gitmob.android.util.LogManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayInputStream
+import java.util.zip.ZipInputStream
 
 class RepoRepository {
 
@@ -71,14 +77,26 @@ class RepoRepository {
         api.createRepo(body)
     }
 
-    suspend fun updateRepo(owner: String, repo: String, body: GHUpdateRepoRequest): GHRepo = withContext(Dispatchers.IO) {
-        invalidateReposCache()
-        api.updateRepo(owner, repo, body)
-    }
+    suspend fun updateRepo(owner: String, repo: String, body: GHUpdateRepoRequest): GHRepo =
+        withContext(Dispatchers.IO) {
+            invalidateReposCache()
+            api.updateRepo(owner, repo, body)
+        }
 
     suspend fun deleteRepo(owner: String, repo: String): Boolean = withContext(Dispatchers.IO) {
         val resp = api.deleteRepo(owner, repo)
         invalidateReposCache()
+        resp.isSuccessful
+    }
+
+    suspend fun transferRepo(owner: String, repo: String, newOwner: String, newName: String? = null): GHRepo =
+        withContext(Dispatchers.IO) {
+            invalidateReposCache()
+            api.transferRepo(owner, repo, GHTransferRepoRequest(newOwner = newOwner, newName = newName))
+        }
+
+    suspend fun checkRepoExists(owner: String, repo: String): Boolean = withContext(Dispatchers.IO) {
+        val resp = api.checkRepoExists(owner, repo)
         resp.isSuccessful
     }
 
@@ -238,4 +256,185 @@ class RepoRepository {
 
     suspend fun getIssues(owner: String, repo: String): List<GHIssue> =
         withContext(Dispatchers.IO) { api.getIssues(owner, repo) }
+
+    suspend fun deleteIssue(owner: String, repo: String, issueNumber: Int): Boolean =
+        withContext(Dispatchers.IO) { api.deleteIssue(owner, repo, issueNumber).isSuccessful }
+
+    // ─── Releases ───
+    suspend fun getReleases(owner: String, repo: String): List<GHRelease> =
+        withContext(Dispatchers.IO) { api.getReleases(owner, repo) }
+
+    // ─── GitHub Actions ───
+    suspend fun getWorkflows(owner: String, repo: String): List<GHWorkflow> =
+        withContext(Dispatchers.IO) { api.getWorkflows(owner, repo).workflows }
+
+    suspend fun getWorkflowRuns(owner: String, repo: String, workflowId: Long? = null): List<GHWorkflowRun> =
+        withContext(Dispatchers.IO) {
+            if (workflowId != null) {
+                api.getWorkflowRunsForWorkflow(owner, repo, workflowId).workflowRuns
+            } else {
+                api.getWorkflowRuns(owner, repo).workflowRuns
+            }
+        }
+
+    suspend fun getWorkflowJobs(owner: String, repo: String, runId: Long): List<GHWorkflowJob> =
+        withContext(Dispatchers.IO) { api.getWorkflowJobs(owner, repo, runId).jobs }
+
+    suspend fun dispatchWorkflow(
+        owner: String, repo: String, workflowId: Long,
+        ref: String, inputs: Map<String, Any>? = null,
+    ): Boolean = withContext(Dispatchers.IO) {
+        api.dispatchWorkflow(owner, repo, workflowId, GHWorkflowDispatchRequest(ref, inputs)).isSuccessful
+    }
+
+    suspend fun deleteWorkflowRun(owner: String, repo: String, runId: Long): Boolean =
+        withContext(Dispatchers.IO) { api.deleteWorkflowRun(owner, repo, runId).isSuccessful }
+
+    suspend fun rerunWorkflow(owner: String, repo: String, runId: Long): Boolean =
+        withContext(Dispatchers.IO) { api.rerunWorkflow(owner, repo, runId).isSuccessful }
+
+    suspend fun cancelWorkflow(owner: String, repo: String, runId: Long): Boolean =
+        withContext(Dispatchers.IO) { api.cancelWorkflow(owner, repo, runId).isSuccessful }
+
+    suspend fun getWorkflowLogs(owner: String, repo: String, runId: Long): Map<String, String>? =
+        withContext(Dispatchers.IO) {
+            val response = api.getWorkflowLogs(owner, repo, runId)
+            if (response.isSuccessful) {
+                val bytes = response.body()?.bytes()
+                if (bytes != null) {
+                    parseWorkflowLogs(bytes)
+                } else {
+                    null
+                }
+            } else {
+                null
+            }
+        }
+
+    /**
+     * 解析工作流日志 zip 文件
+     * 返回 Map：key 为文件名（通常是 job/step 名称），value 为日志内容
+     */
+    private fun parseWorkflowLogs(zipBytes: ByteArray): Map<String, String> {
+        val logs = mutableMapOf<String, String>()
+        val zipInput = ZipInputStream(ByteArrayInputStream(zipBytes))
+        try {
+            var entry = zipInput.nextEntry
+            while (entry != null) {
+                if (!entry.isDirectory) {
+                    val content = zipInput.readBytes().toString(Charsets.UTF_8)
+                    logs[entry.name] = content
+                    LogManager.d("WorkflowLogs", "解析日志文件: ${entry.name}, 长度: ${content.length}")
+                }
+                zipInput.closeEntry()
+                entry = zipInput.nextEntry
+            }
+        } catch (e: Exception) {
+            LogManager.e("WorkflowLogs", "解析 zip 日志失败", e)
+        } finally {
+            zipInput.close()
+        }
+        return logs
+    }
+
+    suspend fun getWorkflowInputs(
+        owner: String,
+        repo: String,
+        workflowPath: String,
+        ref: String? = null,
+    ): List<WorkflowInput> = withContext(Dispatchers.IO) {
+        try {
+            LogManager.d("WorkflowInputs", "获取工作流输入: owner=$owner, repo=$repo, path=$workflowPath, ref=$ref")
+            val file = api.getFile(owner, repo, workflowPath, ref)
+            LogManager.d("WorkflowInputs", "文件信息: encoding=${file.encoding}, content长度=${file.content?.length}")
+            
+            if (file.encoding == "base64" && file.content != null) {
+                val content = String(Base64.decode(file.content, Base64.DEFAULT), Charsets.UTF_8)
+                LogManager.d("WorkflowInputs", "解码后内容长度: ${content.length}")
+                parseWorkflowInputs(content)
+            } else {
+                LogManager.w("WorkflowInputs", "文件编码不是 base64 或内容为空")
+                emptyList()
+            }
+        } catch (e: Exception) {
+            LogManager.e("WorkflowInputs", "获取工作流输入失败", e)
+            emptyList()
+        }
+    }
+
+    private fun parseWorkflowInputs(yamlContent: String): List<WorkflowInput> {
+        val yamlMapper = ObjectMapper(YAMLFactory()).registerKotlinModule()
+        val inputs = mutableListOf<WorkflowInput>()
+
+        try {
+            // 将 'on:' 替换为 'on_trigger:' 避免被解析为布尔值（只在行首替换）
+            val modifiedContent = yamlContent.replace(Regex("^on:", setOf(RegexOption.MULTILINE)), "on_trigger:")
+            LogManager.d("WorkflowParser", "开始解析 YAML，内容长度: ${yamlContent.length}")
+            val root = yamlMapper.readValue(modifiedContent, Map::class.java)
+            LogManager.d("WorkflowParser", "根节点 keys: ${root.keys}")
+            
+            val onValue = root["on_trigger"]
+            LogManager.d("WorkflowParser", "on_trigger 字段类型: ${onValue?.javaClass?.simpleName}, 值: $onValue")
+
+            var workflowDispatch: Map<*, *>? = null
+
+            when (onValue) {
+                is Map<*, *> -> {
+                    LogManager.d("WorkflowParser", "on 是 Map 类型")
+                    workflowDispatch = onValue["workflow_dispatch"] as? Map<*, *>
+                    LogManager.d("WorkflowParser", "workflow_dispatch: $workflowDispatch")
+                }
+                is List<*> -> {
+                    LogManager.d("WorkflowParser", "on 是 List 类型，大小: ${onValue.size}")
+                    onValue.forEach { item ->
+                        if (item is Map<*, *> && item.containsKey("workflow_dispatch")) {
+                            workflowDispatch = item["workflow_dispatch"] as? Map<*, *>
+                            LogManager.d("WorkflowParser", "找到 workflow_dispatch: $workflowDispatch")
+                        }
+                    }
+                }
+                is String -> {
+                    LogManager.d("WorkflowParser", "on 是 String 类型: $onValue")
+                    if (onValue == "workflow_dispatch") {
+                        workflowDispatch = emptyMap<String, Any>()
+                    }
+                }
+            }
+
+            workflowDispatch?.let { dispatch ->
+                LogManager.d("WorkflowParser", "workflow_dispatch keys: ${dispatch.keys}")
+                val inputsMap = dispatch["inputs"] as? Map<*, *>
+                LogManager.d("WorkflowParser", "inputs: $inputsMap")
+
+                inputsMap?.forEach { (key, value) ->
+                    val name = key.toString()
+                    val inputConfig = value as? Map<*, *> ?: return@forEach
+                    
+                    val type = inputConfig["type"]?.toString() ?: "string"
+                    val description = inputConfig["description"]?.toString()
+                    val required = inputConfig["required"] as? Boolean ?: false
+                    val default = inputConfig["default"]
+                    val options = (inputConfig["options"] as? List<*>)?.mapNotNull { it?.toString() }
+                    
+                    LogManager.d("WorkflowParser", "解析输入: name=$name, type=$type, description=$description, required=$required, default=$default, options=$options")
+
+                    inputs.add(
+                        WorkflowInput(
+                            name = name,
+                            type = type,
+                            description = description,
+                            required = required,
+                            default = default,
+                            options = options
+                        )
+                    )
+                }
+            } ?: LogManager.w("WorkflowParser", "未找到 workflow_dispatch 配置")
+        } catch (e: Exception) {
+            LogManager.e("WorkflowParser", "解析 YAML 失败", e)
+        }
+
+        LogManager.d("WorkflowParser", "最终解析结果: ${inputs.size} 个输入")
+        return inputs
+    }
 }
