@@ -116,18 +116,24 @@ jobs:
           path: app/build/outputs/apk/release/*.apk
           retention-days: 90
 
-      # ── 8. 自动发布 GitHub Release（仅 tag 触发）──
+      # ── 8. 自动发布 GitHub Release ──
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.release_type == 'release'
         uses: softprops/action-gh-release@v2
         with:
+          # 【关键修改】：明确指定 Tag 名称
+          # 如果是推送 tag 触发，它会使用该 tag；
+          # 如果是手动触发，它会使用我们在第 4 步计算出的 version 名称
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', steps.version.outputs.name) }}
           name: GitMob v${{ steps.version.outputs.name }}
           draft: false
           prerelease: false
           generate_release_notes: true
+          # 确保指向正确的 release 路径
           files: app/build/outputs/apk/release/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
 
       # ── 9. 清理 keystore ──
       - name: Clean keystore
