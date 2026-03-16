@@ -1,13 +1,9 @@
 package com.gitmob.android.ui.repo
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.widget.Toast
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -20,6 +16,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -32,7 +29,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.gitmob.android.api.*
 import com.gitmob.android.ui.common.*
@@ -1441,7 +1437,6 @@ fun WorkflowRunDetailSheet(
     onCancel: () -> Unit
 ) {
     val context = LocalContext.current
-    val state by vm.state.collectAsState()
     val statusColor = when (run.status) {
         "completed" -> when (run.conclusion) {
             "success" -> Green
@@ -1452,30 +1447,6 @@ fun WorkflowRunDetailSheet(
         "in_progress" -> BlueColor
         "queued" -> Yellow
         else -> c.textTertiary
-    }
-    var showLogsDialog by remember { mutableStateOf(false) }
-
-    LaunchedEffect(Unit) {
-        if (state.workflowLogs == null && !state.workflowLogsLoading) {
-            vm.loadWorkflowLogs(run.id)
-        }
-    }
-
-    val stepLogsMap = remember(state.workflowLogs, jobs) {
-        buildStepLogsMap(state.workflowLogs, jobs)
-    }
-
-    if (showLogsDialog) {
-        WorkflowLogsDialog(
-            logs = state.workflowLogs,
-            loading = state.workflowLogsLoading,
-            c = c,
-            onDismiss = {
-                showLogsDialog = false
-                vm.clearWorkflowLogs()
-            },
-            onLoadLogs = { vm.loadWorkflowLogs(run.id) }
-        )
     }
 
     ModalBottomSheet(
@@ -1557,8 +1528,7 @@ fun WorkflowRunDetailSheet(
                 jobs.forEach { job ->
                     JobCard(
                         job = job,
-                        c = c,
-                        stepLogs = stepLogsMap[job.id] ?: emptyMap()
+                        c = c
                     )
                 }
             }
@@ -1566,50 +1536,8 @@ fun WorkflowRunDetailSheet(
     }
 }
 
-/**
- * 构建 Step 日志映射
- * 返回 Map<JobId, Map<StepNumber, LogContent>>
- */
-fun buildStepLogsMap(
-    logs: Map<String, String>?,
-    jobs: List<GHWorkflowJob>
-): Map<Long, Map<Int, String>> {
-    val result = mutableMapOf<Long, MutableMap<Int, String>>()
-    logs ?: return result
-
-    for ((filename, content) in logs) {
-        LogManager.d("StepLogs", "处理日志文件: $filename")
-        
-        for (job in jobs) {
-            val jobName = job.name ?: continue
-            if (filename.contains(jobName) || filename.contains(job.id.toString())) {
-                val jobStepLogs = result.getOrPut(job.id) { mutableMapOf() }
-                
-                for (step in job.steps ?: emptyList()) {
-                    val stepName = step.name ?: continue
-                    val stepNumber = step.number
-                    
-                    if (filename.contains(stepName) || filename.contains("$stepNumber")) {
-                        jobStepLogs[stepNumber] = content
-                        LogManager.d("StepLogs", "匹配: Job=${job.id}, Step=$stepNumber -> $filename")
-                    }
-                }
-                
-                if (jobStepLogs.isEmpty()) {
-                    job.steps?.forEach { step ->
-                        jobStepLogs[step.number] = content
-                    }
-                }
-            }
-        }
-    }
-    
-    return result
-}
-
 @Composable
-fun JobCard(job: GHWorkflowJob, c: GmColors, stepLogs: Map<Int, String> = emptyMap()) {
-    var expanded by remember { mutableStateOf(false) }
+fun JobCard(job: GHWorkflowJob, c: GmColors) {
     val statusColor = when (job.status) {
         "completed" -> when (job.conclusion) {
             "success" -> Green
@@ -1627,7 +1555,6 @@ fun JobCard(job: GHWorkflowJob, c: GmColors, stepLogs: Map<Int, String> = emptyM
         modifier = Modifier
             .fillMaxWidth()
             .background(c.bgItem, RoundedCornerShape(8.dp))
-            .clickable { expanded = !expanded }
             .padding(10.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1639,37 +1566,25 @@ fun JobCard(job: GHWorkflowJob, c: GmColors, stepLogs: Map<Int, String> = emptyM
             Spacer(Modifier.width(8.dp))
             Text(job.name ?: "Job", fontSize = 13.sp, color = c.textPrimary, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
             GmBadge(jobStatusText, statusColor.copy(alpha = 0.15f), statusColor)
-            Spacer(Modifier.width(4.dp))
-            Icon(
-                if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                null,
-                tint = c.textTertiary,
-                modifier = Modifier.size(20.dp)
-            )
         }
-        AnimatedVisibility(visible = expanded) {
-            Column {
-                Spacer(Modifier.height(8.dp))
-                GmDivider()
-                Spacer(Modifier.height(8.dp))
-                job.steps?.let { steps ->
-                    steps.forEach { step ->
-                        StepRow(
-                            step = step,
-                            c = c,
-                            stepLogs = stepLogs[step.number]
-                        )
-                    }
-                } ?: Text("暂无步骤信息", fontSize = 12.sp, color = c.textTertiary)
+        Spacer(Modifier.height(8.dp))
+        GmDivider()
+        Spacer(Modifier.height(8.dp))
+        job.steps?.let { steps ->
+            steps.forEach { step ->
+                StepRow(
+                    step = step,
+                    c = c,
+                    jobHtmlUrl = job.htmlUrl
+                )
             }
-        }
+        } ?: Text("暂无步骤信息", fontSize = 12.sp, color = c.textTertiary)
     }
 }
 
 @Composable
-fun StepRow(step: GHWorkflowStep, c: GmColors, stepLogs: String? = null) {
+fun StepRow(step: GHWorkflowStep, c: GmColors, jobHtmlUrl: String) {
     val context = LocalContext.current
-    var expanded by remember { mutableStateOf(false) }
     val statusColor = when (step.status) {
         "completed" -> when (step.conclusion) {
             "success" -> Green
@@ -1682,223 +1597,40 @@ fun StepRow(step: GHWorkflowStep, c: GmColors, stepLogs: String? = null) {
         else -> c.textTertiary
     }
 
-    Column(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
+        Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 2.dp)
-                .clickable { expanded = !expanded },
-            verticalAlignment = Alignment.CenterVertically
+                .size(6.dp)
+                .background(statusColor, CircleShape)
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            "${step.number}. ${step.name ?: "Step"}",
+            fontSize = 12.sp,
+            color = c.textSecondary,
+            modifier = Modifier.weight(1f)
+        )
+        IconButton(
+            onClick = {
+                val stepUrl = "$jobHtmlUrl#step:${step.number}:1"
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(stepUrl))
+                context.startActivity(intent)
+            },
+            modifier = Modifier.size(24.dp)
         ) {
-            Box(
-                modifier = Modifier
-                    .size(6.dp)
-                    .background(statusColor, CircleShape)
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(
-                "${step.number}. ${step.name ?: "Step"}",
-                fontSize = 12.sp,
-                color = c.textSecondary,
-                modifier = Modifier.weight(1f)
-            )
-            IconButton(
-                onClick = {
-                    val text = "${step.number}. ${step.name ?: "Step"}"
-                    val clipboard = ContextCompat.getSystemService(context, ClipboardManager::class.java)
-                    val clip = ClipData.newPlainText("step", text)
-                    clipboard?.setPrimaryClip(clip)
-                    Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
-                },
-                modifier = Modifier.size(24.dp)
-            ) {
-                Icon(
-                    Icons.Default.ContentCopy,
-                    null,
-                    tint = c.textTertiary,
-                    modifier = Modifier.size(16.dp)
-                )
-            }
             Icon(
-                if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                Icons.AutoMirrored.Filled.OpenInNew,
                 null,
                 tint = c.textTertiary,
-                modifier = Modifier.size(20.dp)
+                modifier = Modifier.size(16.dp)
             )
         }
-        AnimatedVisibility(visible = expanded) {
-            Column {
-                Spacer(Modifier.height(4.dp))
-                if (stepLogs != null) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 200.dp)
-                            .background(c.bgCard, RoundedCornerShape(4.dp))
-                            .padding(8.dp)
-                            .verticalScroll(rememberScrollState())
-                    ) {
-                        Text(
-                            text = stepLogs,
-                            fontSize = 10.sp,
-                            color = c.textTertiary,
-                            fontFamily = FontFamily.Monospace,
-                            lineHeight = 14.sp
-                        )
-                    }
-                } else {
-                    Text(
-                        "暂无日志",
-                        fontSize = 11.sp,
-                        color = c.textTertiary
-                    )
-                }
-                Spacer(Modifier.height(4.dp))
-            }
-        }
     }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun WorkflowLogsDialog(
-    logs: Map<String, String>?,
-    loading: Boolean,
-    c: GmColors,
-    onDismiss: () -> Unit,
-    onLoadLogs: () -> Unit
-) {
-    val context = LocalContext.current
-    var selectedLogFile by remember { mutableStateOf<String?>(null) }
-    
-    LaunchedEffect(logs) {
-        if (selectedLogFile == null && logs != null && logs.isNotEmpty()) {
-            selectedLogFile = logs.keys.firstOrNull()
-        }
-    }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = c.bgCard,
-        title = { Text("工作流日志", color = c.textPrimary) },
-        text = {
-            when {
-                loading -> {
-                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = Coral)
-                    }
-                }
-                logs.isNullOrEmpty() -> {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        Text("日志为空或加载失败", fontSize = 13.sp, color = c.textTertiary)
-                        Button(
-                            onClick = onLoadLogs,
-                            colors = ButtonDefaults.buttonColors(containerColor = Coral)
-                        ) {
-                            Text("重试")
-                        }
-                    }
-                }
-                else -> {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        if (logs.size > 1) {
-                            var expanded by remember { mutableStateOf(false) }
-                            ExposedDropdownMenuBox(
-                                expanded = expanded,
-                                onExpandedChange = { expanded = !expanded }
-                            ) {
-                                OutlinedTextField(
-                                    value = selectedLogFile ?: "选择日志文件",
-                                    onValueChange = {},
-                                    readOnly = true,
-                                    label = { Text("日志文件") },
-                                    singleLine = true,
-                                    trailingIcon = {
-                                        ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
-                                    },
-                                    colors = OutlinedTextFieldDefaults.colors(
-                                        focusedBorderColor = Coral,
-                                        unfocusedBorderColor = c.border,
-                                        focusedTextColor = c.textPrimary,
-                                    ),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .menuAnchor()
-                                )
-                                ExposedDropdownMenu(
-                                    expanded = expanded,
-                                    onDismissRequest = { expanded = false }
-                                ) {
-                                    logs.keys.forEach { filename ->
-                                        DropdownMenuItem(
-                                            text = { Text(filename, color = c.textPrimary, fontSize = 12.sp) },
-                                            onClick = {
-                                                selectedLogFile = filename
-                                                expanded = false
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                        
-                        val selectedLogContent = selectedLogFile?.let { logs[it] }
-                        if (selectedLogContent != null) {
-                            val scrollState = rememberScrollState()
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(400.dp)
-                                    .background(c.bgItem, RoundedCornerShape(8.dp))
-                            ) {
-                                Text(
-                                    text = selectedLogContent,
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .verticalScroll(scrollState)
-                                        .padding(12.dp),
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 11.sp,
-                                    color = c.textSecondary,
-                                    lineHeight = 14.sp
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            if (!loading && !logs.isNullOrEmpty() && selectedLogFile != null) {
-                Button(
-                    onClick = {
-                        val content = logs[selectedLogFile]
-                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                        val clip = android.content.ClipData.newPlainText("Workflow Logs", content)
-                        clipboard.setPrimaryClip(clip)
-                        Toast.makeText(context, "日志已复制到剪贴板", Toast.LENGTH_SHORT).show()
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = c.bgItem, contentColor = c.textPrimary)
-                ) {
-                    Text("复制日志")
-                }
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("关闭", color = c.textSecondary)
-            }
-        }
-    )
 }
 
 // ─── Commit Detail Modal ───────────────────────────────────────────

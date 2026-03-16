@@ -288,8 +288,8 @@ class RepoDetailViewModel(app: Application, savedStateHandle: SavedStateHandle) 
     fun setDefaultBranch(branch: String) = viewModelScope.launch {
         try {
             repository.updateRepo(owner, repoName, com.gitmob.android.api.GHUpdateRepoRequest(defaultBranch = branch))
-            val updated = repository.getRepo(owner, repoName)
-            _state.update { it.copy(repo = updated, toast = "默认分支已设为 $branch") }
+            val updated = repository.getRepo(owner, repoName, forceRefresh = true)
+            _state.update { it.copy(repo = updated, currentBranch = branch, toast = "默认分支已设为 $branch") }
         } catch (e: Exception) {
             _state.update { it.copy(toast = "设置失败：${e.message}") }
         }
