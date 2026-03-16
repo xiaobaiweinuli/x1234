@@ -126,11 +126,107 @@ interface GitHubApi {
         @Query("per_page") perPage: Int = 30,
     ): List<GHIssue>
 
+    @POST("repos/{owner}/{repo}/issues")
+    suspend fun createIssue(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Body body: GHCreateIssueRequest,
+    ): GHIssue
+
+    @GET("repos/{owner}/{repo}/issues/{issueNumber}")
+    suspend fun getIssue(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("issueNumber") issueNumber: Int,
+    ): GHIssue
+
+    @PATCH("repos/{owner}/{repo}/issues/{issueNumber}")
+    suspend fun updateIssue(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("issueNumber") issueNumber: Int,
+        @Body body: GHUpdateIssueRequest,
+    ): GHIssue
+
     @DELETE("repos/{owner}/{repo}/issues/{issueNumber}")
     suspend fun deleteIssue(
         @Path("owner") owner: String,
         @Path("repo") repo: String,
         @Path("issueNumber") issueNumber: Int,
+    ): Response<Unit>
+
+    @PUT("repos/{owner}/{repo}/issues/{issueNumber}/lock")
+    suspend fun lockIssue(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("issueNumber") issueNumber: Int,
+    ): Response<Unit>
+
+    @DELETE("repos/{owner}/{repo}/issues/{issueNumber}/lock")
+    suspend fun unlockIssue(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("issueNumber") issueNumber: Int,
+    ): Response<Unit>
+
+    @GET("repos/{owner}/{repo}/issues/{issueNumber}/subscription")
+    suspend fun getIssueSubscription(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("issueNumber") issueNumber: Int,
+    ): GHIssueSubscription
+
+    @PUT("repos/{owner}/{repo}/issues/{issueNumber}/subscription")
+    suspend fun subscribeIssue(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("issueNumber") issueNumber: Int,
+    ): GHIssueSubscription
+
+    @DELETE("repos/{owner}/{repo}/issues/{issueNumber}/subscription")
+    suspend fun unsubscribeIssue(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("issueNumber") issueNumber: Int,
+    ): Response<Unit>
+
+    // ── Issue Comments ──
+    @GET("repos/{owner}/{repo}/issues/{issueNumber}/comments")
+    suspend fun getIssueComments(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("issueNumber") issueNumber: Int,
+        @Query("per_page") perPage: Int = 100,
+    ): List<GHComment>
+
+    @POST("repos/{owner}/{repo}/issues/{issueNumber}/comments")
+    suspend fun createIssueComment(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("issueNumber") issueNumber: Int,
+        @Body body: GHCreateCommentRequest,
+    ): GHComment
+
+    @GET("repos/{owner}/{repo}/issues/comments/{commentId}")
+    suspend fun getIssueComment(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("commentId") commentId: Long,
+    ): GHComment
+
+    @PATCH("repos/{owner}/{repo}/issues/comments/{commentId}")
+    suspend fun updateIssueComment(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("commentId") commentId: Long,
+        @Body body: GHUpdateCommentRequest,
+    ): GHComment
+
+    @DELETE("repos/{owner}/{repo}/issues/comments/{commentId}")
+    suspend fun deleteIssueComment(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("commentId") commentId: Long,
     ): Response<Unit>
 
     // ── Releases ──

@@ -96,6 +96,7 @@ dependencies {
     implementation(libs.androidx.splashscreen)
     implementation(libs.material)
     implementation(libs.androidx.compose.material.icons.extended)
+    implementation(libs.accompanist.swiperefresh)
     implementation(libs.retrofit)
     implementation(libs.retrofit.converter.gson)
     implementation(libs.okhttp.logging)

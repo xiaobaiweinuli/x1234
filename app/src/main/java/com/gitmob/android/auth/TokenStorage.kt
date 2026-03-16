@@ -29,6 +29,7 @@ class TokenStorage(private val context: Context) {
         val LOCAL_REPOS   = stringPreferencesKey("local_repos_json")   // JSON 列表
         val BOOKMARKS     = stringPreferencesKey("file_bookmarks_json") // 自定义书签
         val LOG_LEVEL     = intPreferencesKey("log_level")
+        val TAB_STEP_BACK = booleanPreferencesKey("tab_step_back")      // 仓库详情Tab逐级返回
     }
 
     val accessToken: Flow<String?> = context.dataStore.data.map { it[Keys.ACCESS_TOKEN] }
@@ -58,6 +59,11 @@ class TokenStorage(private val context: Context) {
         it[Keys.BOOKMARKS] ?: "[]"
     }
 
+    /** 仓库详情Tab逐级返回开关，默认关闭 */
+    val tabStepBack: Flow<Boolean> = context.dataStore.data.map {
+        it[Keys.TAB_STEP_BACK] ?: false
+    }
+
     suspend fun saveToken(token: String) {
         context.dataStore.edit { it[Keys.ACCESS_TOKEN] = token }
     }
@@ -85,6 +91,10 @@ class TokenStorage(private val context: Context) {
 
     suspend fun saveBookmarksJson(json: String) {
         context.dataStore.edit { it[Keys.BOOKMARKS] = json }
+    }
+
+    suspend fun setTabStepBack(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.TAB_STEP_BACK] = enabled }
     }
 
     suspend fun clear() { context.dataStore.edit { it.clear() } }

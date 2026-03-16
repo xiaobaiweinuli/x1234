@@ -138,11 +138,68 @@ data class GHIssue(
     val body: String?,
     @SerializedName("html_url") val htmlUrl: String,
     @SerializedName("created_at") val createdAt: String,
+    @SerializedName("updated_at") val updatedAt: String?,
     val user: GHOwner,
+    val labels: List<GHLabel> = emptyList(),
+    val comments: Int? = null,
     @SerializedName("pull_request") val pullRequest: Any? = null,
 ) {
     val isPR get() = pullRequest != null
 }
+
+data class GHLabel(
+    val id: Long,
+    val name: String,
+    val color: String,
+    val description: String?,
+)
+
+data class GHComment(
+    val id: Long,
+    val body: String,
+    val user: GHOwner,
+    @SerializedName("created_at") val createdAt: String,
+    @SerializedName("updated_at") val updatedAt: String,
+    @SerializedName("html_url") val htmlUrl: String,
+    @SerializedName("author_association") val authorAssociation: String?,
+)
+
+data class GHCreateCommentRequest(
+    val body: String,
+)
+
+data class GHUpdateCommentRequest(
+    val body: String,
+)
+
+data class GHUpdateIssueRequest(
+    val title: String? = null,
+    val body: String? = null,
+    val state: String? = null,
+    @SerializedName("state_reason") val stateReason: String? = null,
+)
+
+data class GHCreateIssueRequest(
+    val title: String,
+    val body: String? = null,
+)
+
+data class GHIssueSubscription(
+    val subscribed: Boolean,
+    val ignored: Boolean,
+    val reason: String? = null,
+    @SerializedName("created_at") val createdAt: String? = null,
+    val url: String? = null,
+    @SerializedName("repository_url") val repositoryUrl: String? = null,
+)
+
+data class GHIssueEvent(
+    val id: Long,
+    val event: String,
+    val actor: GHOwner?,
+    @SerializedName("created_at") val createdAt: String,
+    val commit_id: String? = null,
+)
 
 data class GHRelease(
     val id: Long,

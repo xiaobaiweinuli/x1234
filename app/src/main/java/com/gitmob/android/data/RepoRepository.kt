@@ -257,8 +257,69 @@ class RepoRepository {
     suspend fun getIssues(owner: String, repo: String): List<GHIssue> =
         withContext(Dispatchers.IO) { api.getIssues(owner, repo) }
 
+    suspend fun getIssue(owner: String, repo: String, issueNumber: Int): GHIssue =
+        withContext(Dispatchers.IO) { api.getIssue(owner, repo, issueNumber) }
+
+    suspend fun updateIssue(
+        owner: String,
+        repo: String,
+        issueNumber: Int,
+        request: GHUpdateIssueRequest
+    ): GHIssue = withContext(Dispatchers.IO) { api.updateIssue(owner, repo, issueNumber, request) }
+
     suspend fun deleteIssue(owner: String, repo: String, issueNumber: Int): Boolean =
         withContext(Dispatchers.IO) { api.deleteIssue(owner, repo, issueNumber).isSuccessful }
+
+    suspend fun createIssue(
+        owner: String,
+        repo: String,
+        title: String,
+        body: String? = null,
+    ): GHIssue = withContext(Dispatchers.IO) {
+        api.createIssue(owner, repo, GHCreateIssueRequest(title = title, body = body))
+    }
+
+    suspend fun lockIssue(owner: String, repo: String, issueNumber: Int): Boolean =
+        withContext(Dispatchers.IO) { api.lockIssue(owner, repo, issueNumber).isSuccessful }
+
+    suspend fun unlockIssue(owner: String, repo: String, issueNumber: Int): Boolean =
+        withContext(Dispatchers.IO) { api.unlockIssue(owner, repo, issueNumber).isSuccessful }
+
+    suspend fun getIssueSubscription(owner: String, repo: String, issueNumber: Int): GHIssueSubscription =
+        withContext(Dispatchers.IO) { api.getIssueSubscription(owner, repo, issueNumber) }
+
+    suspend fun subscribeIssue(owner: String, repo: String, issueNumber: Int): GHIssueSubscription =
+        withContext(Dispatchers.IO) { api.subscribeIssue(owner, repo, issueNumber) }
+
+    suspend fun unsubscribeIssue(owner: String, repo: String, issueNumber: Int): Boolean =
+        withContext(Dispatchers.IO) { api.unsubscribeIssue(owner, repo, issueNumber).isSuccessful }
+
+    suspend fun getIssueComments(owner: String, repo: String, issueNumber: Int): List<GHComment> =
+        withContext(Dispatchers.IO) { api.getIssueComments(owner, repo, issueNumber) }
+
+    suspend fun createIssueComment(
+        owner: String,
+        repo: String,
+        issueNumber: Int,
+        body: String
+    ): GHComment = withContext(Dispatchers.IO) {
+        api.createIssueComment(owner, repo, issueNumber, GHCreateCommentRequest(body))
+    }
+
+    suspend fun getIssueComment(owner: String, repo: String, commentId: Long): GHComment =
+        withContext(Dispatchers.IO) { api.getIssueComment(owner, repo, commentId) }
+
+    suspend fun updateIssueComment(
+        owner: String,
+        repo: String,
+        commentId: Long,
+        body: String
+    ): GHComment = withContext(Dispatchers.IO) {
+        api.updateIssueComment(owner, repo, commentId, GHUpdateCommentRequest(body))
+    }
+
+    suspend fun deleteIssueComment(owner: String, repo: String, commentId: Long): Boolean =
+        withContext(Dispatchers.IO) { api.deleteIssueComment(owner, repo, commentId).isSuccessful }
 
     // ─── Releases ───
     suspend fun getReleases(owner: String, repo: String): List<GHRelease> =

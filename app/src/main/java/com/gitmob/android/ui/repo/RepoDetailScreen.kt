@@ -27,16 +27,20 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.border
+import com.google.accompanist.swiperefresh.SwipeRefresh
+import com.google.accompanist.swiperefresh.rememberSwipeRefreshState
 import com.gitmob.android.api.*
 import com.gitmob.android.ui.common.*
 import com.gitmob.android.ui.theme.*
 import com.gitmob.android.util.LogManager
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.border
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
@@ -53,13 +57,378 @@ import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import androidx.compose.ui.draw.clip
 
+/**
+ * 对Issues列表进行筛选和排序
+ */
+private fun filterAndSortIssues(issues: List<GHIssue>, filterState: IssueFilterState): List<GHIssue> {
+    var result = issues.filter { !it.isPR }
+
+    result = when (filterState.status) {
+        IssueStatusFilter.OPEN -> result.filter { it.state == "open" }
+        IssueStatusFilter.CLOSED -> result.filter { it.state == "closed" }
+        IssueStatusFilter.ALL -> result
+    }
+
+    if (filterState.selectedLabels.isNotEmpty()) {
+        result = result.filter { issue ->
+            filterState.selectedLabels.all { label ->
+                issue.labels.any { it.name == label }
+            }
+        }
+    }
+
+    if (filterState.selectedAuthors.isNotEmpty()) {
+        result = result.filter { filterState.selectedAuthors.contains(it.user.login) }
+    }
+
+    result = when (filterState.sortBy) {
+        IssueSortBy.NEWEST -> result.sortedByDescending { it.createdAt }
+        IssueSortBy.OLDEST -> result.sortedBy { it.createdAt }
+        IssueSortBy.MOST_COMMENTS -> result.sortedByDescending { it.comments ?: 0 }
+        IssueSortBy.LEAST_COMMENTS -> result.sortedBy { it.comments ?: 0 }
+    }
+
+    return result
+}
+
+/**
+ * 判断是否有任何筛选条件被应用
+ */
+private fun hasAnyFiltersApplied(filterState: IssueFilterState): Boolean {
+    return filterState.status != IssueStatusFilter.OPEN ||
+           filterState.sortBy != IssueSortBy.NEWEST ||
+           filterState.selectedLabels.isNotEmpty() ||
+           filterState.selectedAuthors.isNotEmpty() ||
+           filterState.selectedAssignees.isNotEmpty() ||
+           filterState.selectedMilestones.isNotEmpty()
+}
+
+/**
+ * Issue筛选工具栏组件
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun IssueFilterToolbar(
+    state: RepoDetailState,
+    c: GmColors,
+    vm: RepoDetailViewModel,
+    onAddIssueClick: () -> Unit = {},
+) {
+    var showStatusDropdown by remember { mutableStateOf(false) }
+    var showSortSheet by remember { mutableStateOf(false) }
+    var showLabelsSheet by remember { mutableStateOf(false) }
+    var showAuthorsSheet by remember { mutableStateOf(false) }
+    var showAssigneesSheet by remember { mutableStateOf(false) }
+    var showMilestonesSheet by remember { mutableStateOf(false) }
+
+    val hasFilters = hasAnyFiltersApplied(state.issueFilterState)
+    val allLabels = vm.getAllLabels().sorted()
+    val allAuthors = vm.getAllAuthors().sorted()
+    val allAssignees = vm.getAllAssignees().sorted()
+    val allMilestones = vm.getAllMilestones().sorted()
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(c.bgCard)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (hasFilters) {
+                TextButton(
+                    onClick = { vm.clearIssueFilters() },
+                    colors = ButtonDefaults.textButtonColors(contentColor = RedColor)
+                ) {
+                    Text("清除", fontSize = 13.sp)
+                }
+            }
+
+            Row(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box {
+                    FilterButton(
+                        text = state.issueFilterState.status.displayName,
+                        isActive = state.issueFilterState.status != IssueStatusFilter.OPEN,
+                        c = c,
+                        onClick = { showStatusDropdown = true }
+                    )
+                    DropdownMenu(
+                        expanded = showStatusDropdown,
+                        onDismissRequest = { showStatusDropdown = false },
+                        modifier = Modifier.background(c.bgCard)
+                    ) {
+                        IssueStatusFilter.values().forEach { status ->
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        RadioButton(
+                                            selected = state.issueFilterState.status == status,
+                                            onClick = null,
+                                            colors = RadioButtonDefaults.colors(selectedColor = Coral)
+                                        )
+                                        Text(status.displayName, fontSize = 13.sp, color = c.textPrimary)
+                                    }
+                                },
+                                onClick = {
+                                    vm.setIssueStatusFilter(status)
+                                    showStatusDropdown = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                FilterButton(
+                    text = state.issueFilterState.sortBy.displayName,
+                    isActive = state.issueFilterState.sortBy != IssueSortBy.NEWEST,
+                    c = c,
+                    onClick = { showSortSheet = true }
+                )
+
+                FilterButton(
+                    text = "标签",
+                    isActive = state.issueFilterState.selectedLabels.isNotEmpty(),
+                    count = state.issueFilterState.selectedLabels.size,
+                    c = c,
+                    onClick = { showLabelsSheet = true }
+                )
+
+                FilterButton(
+                    text = "作者",
+                    isActive = state.issueFilterState.selectedAuthors.isNotEmpty(),
+                    count = state.issueFilterState.selectedAuthors.size,
+                    c = c,
+                    onClick = { showAuthorsSheet = true }
+                )
+            }
+
+            IconButton(
+                onClick = onAddIssueClick,
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(
+                    Icons.Default.Add,
+                    null,
+                    tint = Coral,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+        }
+    }
+
+    if (showSortSheet) {
+        IssueFilterBottomSheet(
+            title = "排序方式",
+            c = c,
+            onDismiss = { showSortSheet = false }
+        ) {
+            IssueSortBy.values().forEach { sortBy ->
+                val isSelected = state.issueFilterState.sortBy == sortBy
+                FilterOptionItem(
+                    text = sortBy.displayName,
+                    isSelected = isSelected,
+                    isRadio = true,
+                    c = c,
+                    onClick = {
+                        vm.setIssueSortBy(sortBy)
+                        showSortSheet = false
+                    }
+                )
+            }
+        }
+    }
+
+    if (showLabelsSheet) {
+        IssueFilterBottomSheet(
+            title = "选择标签",
+            c = c,
+            onDismiss = { showLabelsSheet = false }
+        ) {
+            if (allLabels.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("暂无标签", fontSize = 13.sp, color = c.textTertiary)
+                }
+            } else {
+                allLabels.forEach { label ->
+                    val isSelected = state.issueFilterState.selectedLabels.contains(label)
+                    FilterOptionItem(
+                        text = label,
+                        isSelected = isSelected,
+                        isRadio = false,
+                        c = c,
+                        onClick = { vm.toggleIssueLabel(label) }
+                    )
+                }
+            }
+        }
+    }
+
+    if (showAuthorsSheet) {
+        IssueFilterBottomSheet(
+            title = "选择作者",
+            c = c,
+            onDismiss = { showAuthorsSheet = false }
+        ) {
+            if (allAuthors.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("暂无作者", fontSize = 13.sp, color = c.textTertiary)
+                }
+            } else {
+                allAuthors.forEach { author ->
+                    val isSelected = state.issueFilterState.selectedAuthors.contains(author)
+                    FilterOptionItem(
+                        text = author,
+                        isSelected = isSelected,
+                        isRadio = false,
+                        c = c,
+                        onClick = { vm.toggleIssueAuthor(author) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 筛选按钮组件
+ */
+@Composable
+private fun FilterButton(
+    text: String,
+    isActive: Boolean,
+    c: GmColors,
+    count: Int = 0,
+    onClick: () -> Unit,
+) {
+    Surface(
+        onClick = onClick,
+        color = if (isActive) Coral.copy(alpha = 0.15f) else c.bgItem,
+        shape = RoundedCornerShape(8.dp),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text,
+                fontSize = 13.sp,
+                color = if (isActive) Coral else c.textPrimary
+            )
+            if (count > 0) {
+                Box(
+                    modifier = Modifier
+                        .size(16.dp)
+                        .background(
+                            color = Coral,
+                            shape = CircleShape
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        count.toString(),
+                        fontSize = 10.sp,
+                        color = Color.White,
+                        fontWeight = FontWeight.Medium,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Issue筛选底部弹窗
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun IssueFilterBottomSheet(
+    title: String,
+    c: GmColors,
+    onDismiss: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = c.bgCard,
+        dragHandle = { BottomSheetDefaults.DragHandle(color = c.border) },
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                title,
+                fontSize = 16.sp,
+                color = c.textPrimary,
+                fontWeight = FontWeight.SemiBold
+            )
+            GmDivider()
+            content()
+        }
+    }
+}
+
+/**
+ * 筛选选项项
+ */
+@Composable
+private fun FilterOptionItem(
+    text: String,
+    isSelected: Boolean,
+    isRadio: Boolean,
+    c: GmColors,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        RadioButton(
+            selected = isSelected,
+            onClick = null,
+            colors = RadioButtonDefaults.colors(selectedColor = Coral)
+        )
+        Text(text, fontSize = 13.sp, color = c.textPrimary)
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RepoDetailScreen(
     owner: String,
     repoName: String,
+    tabStepBackEnabled: Boolean,
     onBack: () -> Unit,
     onFileClick: (String, String, String, String) -> Unit,
+    onIssueClick: (Int) -> Unit = {},
     vm: RepoDetailViewModel = viewModel(factory = RepoDetailViewModel.factory(owner, repoName)),
 ) {
     val c = LocalGmColors.current
@@ -79,6 +448,60 @@ fun RepoDetailScreen(
         LaunchedEffect(msg) { kotlinx.coroutines.delay(2500); vm.clearToast() }
     }
 
+    /**
+     * 处理返回按钮
+     * 
+     * 当 tabStepBackEnabled 为 false（关闭状态）时：
+     * 1. 如果设置菜单打开，先关闭菜单
+     * 2. 如果不在文件标签页，先切换到文件标签页
+     * 3. 如果在文件标签页且在子目录，先返回上一级目录
+     * 4. 如果在文件标签页且在根目录，返回上一页
+     * 
+     * 当 tabStepBackEnabled 为 true（开启状态）时，标签页逐级返回逻辑：
+     * 标签页顺序：0=文件, 1=提交, 2=分支, 3=操作, 4=发行版, 5=PR, 6=Issues
+     * 1. 如果设置菜单打开，先关闭菜单
+     * 2. 如果当前标签页索引 > 0，返回上一个标签页（索引减1）
+     * 3. 如果在文件标签页（索引=0）且在子目录，先返回上一级目录
+     * 4. 如果在文件标签页且在根目录，返回上一页
+     */
+    val handleBackPress by rememberUpdatedState(newValue = {
+        when {
+            showSettingsMenu -> {
+                showSettingsMenu = false
+            }
+            tabStepBackEnabled -> {
+                when {
+                    state.tab > 0 -> {
+                        vm.setTab(state.tab - 1)
+                    }
+                    state.currentPath.isNotEmpty() -> {
+                        vm.navigateUp()
+                    }
+                    else -> {
+                        onBack()
+                    }
+                }
+            }
+            else -> {
+                when {
+                    state.tab != 0 -> {
+                        vm.setTab(0)
+                    }
+                    state.currentPath.isNotEmpty() -> {
+                        vm.navigateUp()
+                    }
+                    else -> {
+                        onBack()
+                    }
+                }
+            }
+        }
+    })
+
+    BackHandler(enabled = true) {
+        handleBackPress()
+    }
+
     Scaffold(
         containerColor = c.bgDeep,
         topBar = {
@@ -90,7 +513,7 @@ fun RepoDetailScreen(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = c.textSecondary) }
+                    IconButton(onClick = handleBackPress) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = c.textSecondary) }
                 },
                 actions = {
                     IconButton(onClick = vm::toggleStar) {
@@ -298,15 +721,22 @@ fun RepoDetailScreen(
                     onNavigateUp = vm::navigateUp,
                     onRefresh = { vm.loadContents(state.currentPath, forceRefresh = true) },
                 )
-                1 -> CommitsTab(state, c, onCommitClick = { vm.loadCommitDetail(it.sha) })
+                1 -> CommitsTab(state, c, onCommitClick = { vm.loadCommitDetail(it.sha) },
+                    onRefresh = { vm.loadCommits(forceRefresh = true) })
                 2 -> BranchesTab(state, c, onSwitch = vm::switchBranch,
                     onNewBranch = { showNewBranchDialog = true },
                     onDelete = vm::deleteBranch, onRename = vm::renameBranch,
-                    onSetDefault = vm::setDefaultBranch)
-                3 -> ActionsTab(state, c, vm, owner, repoName)
-                4 -> ReleasesTab(state.releases, c)
-                5 -> PRTab(state.prs, c)
-                6 -> IssuesTab(state.issues, c, vm)
+                    onSetDefault = vm::setDefaultBranch,
+                    onRefresh = vm::refreshBranches)
+                3 -> ActionsTab(state, c, vm, owner, repoName,
+                    onRefresh = vm::refreshActions)
+                4 -> ReleasesTab(state, c,
+                    onRefresh = vm::refreshReleases)
+                5 -> PRTab(state, c,
+                    onRefresh = vm::refreshPRs)
+                6 -> IssuesTab(state, c, vm,
+                    onRefresh = vm::refreshIssues,
+                    onIssueClick = onIssueClick)
             }
         }
     }
@@ -402,6 +832,16 @@ private fun StatItem(icon: ImageVector, text: String, tint: Color) {
 
 // ─── Tabs ────────────────────────────────────────────────────────
 
+/**
+ * 文件标签页组件
+ * 
+ * @param state 仓库详情状态
+ * @param c 颜色主题
+ * @param onDirClick 目录点击回调
+ * @param onFileClick 文件点击回调
+ * @param onNavigateUp 返回上一级目录回调
+ * @param onRefresh 刷新回调
+ */
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
 fun FilesTab(
@@ -412,166 +852,234 @@ fun FilesTab(
     onNavigateUp: () -> Unit,
     onRefresh: () -> Unit = {},
 ) {
-    LazyColumn(
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(1.dp),
+    SwipeRefresh(
+        state = rememberSwipeRefreshState(isRefreshing = state.filesRefreshing),
+        onRefresh = onRefresh,
+        indicator = { state, trigger ->
+            com.google.accompanist.swiperefresh.SwipeRefreshIndicator(
+                state = state,
+                refreshTriggerDistance = trigger,
+                backgroundColor = c.bgCard,
+                contentColor = Coral
+            )
+        }
     ) {
-        if (state.currentPath.isNotEmpty()) {
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth()
-                        .background(c.bgCard, RoundedCornerShape(8.dp))
-                        .clickable(onClick = onNavigateUp)
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, null,
-                        tint = c.textTertiary, modifier = Modifier.size(17.dp))
-                    Text("..", fontSize = 13.sp, color = c.textTertiary)
-                    Spacer(Modifier.weight(1f))
-                    Text(state.currentPath, fontSize = 11.sp,
-                        color = c.textTertiary, fontFamily = FontFamily.Monospace)
+        LazyColumn(
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(1.dp),
+        ) {
+            if (state.currentPath.isNotEmpty()) {
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth()
+                            .background(c.bgCard, RoundedCornerShape(8.dp))
+                            .clickable(onClick = onNavigateUp)
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null,
+                            tint = c.textTertiary, modifier = Modifier.size(17.dp))
+                        Text("..", fontSize = 13.sp, color = c.textTertiary)
+                        Spacer(Modifier.weight(1f))
+                        Text(state.currentPath, fontSize = 11.sp,
+                            color = c.textTertiary, fontFamily = FontFamily.Monospace)
+                    }
                 }
             }
-        }
-        if (state.contentsLoading) {
-            item {
-                Box(Modifier.fillMaxWidth().height(80.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = Coral, modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+            if (state.contentsLoading) {
+                item {
+                    Box(Modifier.fillMaxWidth().height(80.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = Coral, modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                    }
                 }
-            }
-        } else {
-            items(state.contents, key = { it.path }) { content ->
-                val isDir = content.type == "dir"
-                Row(
-                    modifier = Modifier.fillMaxWidth()
-                        .background(c.bgCard, RoundedCornerShape(8.dp))
-                        .clickable { if (isDir) onDirClick(content.path) else onFileClick(content.path) }
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Icon(
-                        if (isDir) Icons.Default.Folder else Icons.Default.Description,
-                        null,
-                        tint     = if (isDir) Yellow else c.textSecondary,
-                        modifier = Modifier.size(17.dp),
-                    )
-                    Text(content.name, fontSize = 13.sp, color = c.textPrimary,
-                        modifier = Modifier.weight(1f))
-                    if (!isDir) Text(formatSize(content.size), fontSize = 11.sp, color = c.textTertiary)
-                    if (isDir) Icon(Icons.AutoMirrored.Filled.ArrowForward, null,
-                        tint = c.textTertiary, modifier = Modifier.size(14.dp))
+            } else {
+                items(state.contents, key = { it.path }) { content ->
+                    val isDir = content.type == "dir"
+                    Row(
+                        modifier = Modifier.fillMaxWidth()
+                            .background(c.bgCard, RoundedCornerShape(8.dp))
+                            .clickable { if (isDir) onDirClick(content.path) else onFileClick(content.path) }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Icon(
+                            if (isDir) Icons.Default.Folder else Icons.Default.Description,
+                            null,
+                            tint     = if (isDir) Yellow else c.textSecondary,
+                            modifier = Modifier.size(17.dp),
+                        )
+                        Text(content.name, fontSize = 13.sp, color = c.textPrimary,
+                            modifier = Modifier.weight(1f))
+                        if (!isDir) Text(formatSize(content.size), fontSize = 11.sp, color = c.textTertiary)
+                        if (isDir) Icon(Icons.AutoMirrored.Filled.ArrowForward, null,
+                            tint = c.textTertiary, modifier = Modifier.size(14.dp))
+                    }
                 }
             }
         }
     }
 }
 
+/**
+ * 提交记录标签页组件
+ * 
+ * @param state 仓库详情状态
+ * @param c 颜色主题
+ * @param onCommitClick 提交点击回调
+ * @param onRefresh 刷新回调
+ */
 @Composable
-fun CommitsTab(state: RepoDetailState, c: GmColors, onCommitClick: (GHCommit) -> Unit) {
-    if (state.commits.isEmpty()) { EmptyBox("暂无提交记录"); return }
-    LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        items(state.commits, key = { it.sha }) { commit ->
-            Column(
-                modifier = Modifier.fillMaxWidth().background(c.bgCard, RoundedCornerShape(12.dp))
-                    .clickable { onCommitClick(commit) }.padding(12.dp),
-            ) {
-                Text(commit.commit.message.lines().first(), fontSize = 13.sp,
-                    color = c.textPrimary, fontWeight = FontWeight.Medium, maxLines = 2)
-                Spacer(Modifier.height(6.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (commit.author != null) AvatarImage(commit.author.avatarUrl, 20)
-                    Text(commit.commit.author.name, fontSize = 11.sp, color = c.textSecondary)
-                    Spacer(Modifier.weight(1f))
-                    Text(commit.shortSha, fontSize = 10.sp, color = Coral,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.background(CoralDim, RoundedCornerShape(4.dp))
-                            .padding(horizontal = 5.dp, vertical = 1.dp))
-                    Text(formatDate(commit.commit.author.date), fontSize = 11.sp, color = c.textTertiary)
+fun CommitsTab(
+    state: RepoDetailState, 
+    c: GmColors, 
+    onCommitClick: (GHCommit) -> Unit,
+    onRefresh: () -> Unit = {},
+) {
+    SwipeRefresh(
+        state = rememberSwipeRefreshState(isRefreshing = state.commitsRefreshing),
+        onRefresh = onRefresh,
+        indicator = { state, trigger ->
+            com.google.accompanist.swiperefresh.SwipeRefreshIndicator(
+                state = state,
+                refreshTriggerDistance = trigger,
+                backgroundColor = c.bgCard,
+                contentColor = Coral
+            )
+        }
+    ) {
+        if (state.commits.isEmpty()) {
+            EmptyBox("暂无提交记录")
+        } else {
+            LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(state.commits, key = { it.sha }) { commit ->
+                    Column(
+                        modifier = Modifier.fillMaxWidth().background(c.bgCard, RoundedCornerShape(12.dp))
+                            .clickable { onCommitClick(commit) }.padding(12.dp),
+                    ) {
+                        Text(commit.commit.message.lines().first(), fontSize = 13.sp,
+                            color = c.textPrimary, fontWeight = FontWeight.Medium, maxLines = 2)
+                        Spacer(Modifier.height(6.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            if (commit.author != null) AvatarImage(commit.author.avatarUrl, 20)
+                            Text(commit.commit.author.name, fontSize = 11.sp, color = c.textSecondary)
+                            Spacer(Modifier.weight(1f))
+                            Text(commit.shortSha, fontSize = 10.sp, color = Coral,
+                                    fontFamily = FontFamily.Monospace,
+                                    modifier = Modifier.background(CoralDim, RoundedCornerShape(4.dp))
+                                        .padding(horizontal = 5.dp, vertical = 1.dp))
+                            Text(formatDate(commit.commit.author.date), fontSize = 11.sp, color = c.textTertiary)
+                        }
+                    }
                 }
             }
         }
     }
 }
 
+/**
+ * 分支管理标签页组件
+ * 
+ * @param state 仓库详情状态
+ * @param c 颜色主题
+ * @param onSwitch 切换分支回调
+ * @param onNewBranch 新建分支回调
+ * @param onDelete 删除分支回调
+ * @param onRename 重命名分支回调
+ * @param onSetDefault 设置默认分支回调
+ * @param onRefresh 刷新回调
+ */
 @Composable
 fun BranchesTab(
     state: RepoDetailState, c: GmColors,
     onSwitch: (String) -> Unit, onNewBranch: () -> Unit,
     onDelete: (String) -> Unit, onRename: (String, String) -> Unit,
     onSetDefault: (String) -> Unit,
+    onRefresh: () -> Unit = {},
 ) {
     var showRenameDialog by remember { mutableStateOf<GHBranch?>(null) }
     var showDeleteDialog by remember { mutableStateOf<GHBranch?>(null) }
     val defaultBranch = state.repo?.defaultBranch ?: ""
-
-    LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        item {
-            Button(onClick = onNewBranch, modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = CoralDim, contentColor = Coral),
-                shape = RoundedCornerShape(12.dp)) {
-                Icon(Icons.Default.Add, null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("新建分支", fontSize = 13.sp)
-            }
+    
+    SwipeRefresh(
+        state = rememberSwipeRefreshState(isRefreshing = state.branchesRefreshing),
+        onRefresh = onRefresh,
+        indicator = { state, trigger ->
+            com.google.accompanist.swiperefresh.SwipeRefreshIndicator(
+                state = state,
+                refreshTriggerDistance = trigger,
+                backgroundColor = c.bgCard,
+                contentColor = Coral
+            )
         }
-        items(state.branches, key = { it.name }) { branch ->
-            val isCurrent = branch.name == state.currentBranch
-            val isDefault = branch.name == defaultBranch
-            var showMenu by remember { mutableStateOf(false) }
+    ) {
+        LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            item {
+                Button(onClick = onNewBranch, modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = CoralDim, contentColor = Coral),
+                    shape = RoundedCornerShape(12.dp)) {
+                    Icon(Icons.Default.Add, null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("新建分支", fontSize = 13.sp)
+                }
+            }
+            items(state.branches, key = { it.name }) { branch ->
+                val isCurrent = branch.name == state.currentBranch
+                val isDefault = branch.name == defaultBranch
+                var showMenu by remember { mutableStateOf(false) }
 
-            Row(
-                modifier = Modifier.fillMaxWidth().background(c.bgCard, RoundedCornerShape(12.dp))
-                    .padding(horizontal = 14.dp, vertical = 11.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(Icons.Default.AccountTree, null,
-                    tint = if (isCurrent) Coral else c.textTertiary, modifier = Modifier.size(15.dp))
-                Spacer(Modifier.width(8.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(branch.name, fontSize = 13.sp,
-                        color = if (isCurrent) Coral else c.textPrimary,
-                        fontFamily = FontFamily.Monospace)
-                    if (isDefault) Text("默认分支", fontSize = 10.sp, color = Green, modifier = Modifier.padding(top = 1.dp))
-                }
-                if (isCurrent) {
-                    GmBadge("当前", CoralDim, Coral)
-                    Spacer(Modifier.width(4.dp))
-                }
-                // 菜单
-                Box {
-                    IconButton(onClick = { showMenu = true }, modifier = Modifier.size(28.dp)) {
-                        Icon(Icons.Default.MoreVert, null, tint = c.textTertiary, modifier = Modifier.size(16.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth().background(c.bgCard, RoundedCornerShape(12.dp))
+                        .padding(horizontal = 14.dp, vertical = 11.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Default.AccountTree, null,
+                        tint = if (isCurrent) Coral else c.textTertiary, modifier = Modifier.size(15.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(branch.name, fontSize = 13.sp,
+                            color = if (isCurrent) Coral else c.textPrimary,
+                            fontFamily = FontFamily.Monospace)
+                        if (isDefault) Text("默认分支", fontSize = 10.sp, color = Green, modifier = Modifier.padding(top = 1.dp))
                     }
-                    DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false },
-                        modifier = Modifier.background(c.bgCard)) {
-                        if (!isCurrent) {
-                            DropdownMenuItem(
-                                text = { Text("切换到此分支", fontSize = 13.sp, color = c.textPrimary) },
-                                leadingIcon = { Icon(Icons.Default.AccountTree, null, tint = BlueColor, modifier = Modifier.size(15.dp)) },
-                                onClick = { onSwitch(branch.name); showMenu = false },
-                            )
+                    if (isCurrent) {
+                        GmBadge("当前", CoralDim, Coral)
+                        Spacer(Modifier.width(4.dp))
+                    }
+                    // 菜单
+                    Box {
+                        IconButton(onClick = { showMenu = true }, modifier = Modifier.size(28.dp)) {
+                            Icon(Icons.Default.MoreVert, null, tint = c.textTertiary, modifier = Modifier.size(16.dp))
                         }
-                        if (!isDefault) {
+                        DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false },
+                            modifier = Modifier.background(c.bgCard)) {
+                            if (!isCurrent) {
+                                DropdownMenuItem(
+                                    text = { Text("切换到此分支", fontSize = 13.sp, color = c.textPrimary) },
+                                    leadingIcon = { Icon(Icons.Default.AccountTree, null, tint = BlueColor, modifier = Modifier.size(15.dp)) },
+                                    onClick = { onSwitch(branch.name); showMenu = false },
+                                )
+                            }
+                            if (!isDefault) {
+                                DropdownMenuItem(
+                                    text = { Text("设为默认分支", fontSize = 13.sp, color = c.textPrimary) },
+                                    leadingIcon = { Icon(Icons.Default.Star, null, tint = Yellow, modifier = Modifier.size(15.dp)) },
+                                    onClick = { onSetDefault(branch.name); showMenu = false },
+                                )
+                            }
                             DropdownMenuItem(
-                                text = { Text("设为默认分支", fontSize = 13.sp, color = c.textPrimary) },
-                                leadingIcon = { Icon(Icons.Default.Star, null, tint = Yellow, modifier = Modifier.size(15.dp)) },
-                                onClick = { onSetDefault(branch.name); showMenu = false },
+                                text = { Text("重命名", fontSize = 13.sp, color = c.textPrimary) },
+                                leadingIcon = { Icon(Icons.Default.DriveFileRenameOutline, null, tint = c.textSecondary, modifier = Modifier.size(15.dp)) },
+                                onClick = { showRenameDialog = branch; showMenu = false },
                             )
-                        }
-                        DropdownMenuItem(
-                            text = { Text("重命名", fontSize = 13.sp, color = c.textPrimary) },
-                            leadingIcon = { Icon(Icons.Default.DriveFileRenameOutline, null, tint = c.textSecondary, modifier = Modifier.size(15.dp)) },
-                            onClick = { showRenameDialog = branch; showMenu = false },
-                        )
-                        if (!isDefault && !isCurrent) {
-                            DropdownMenuItem(
-                                text = { Text("删除分支", fontSize = 13.sp, color = RedColor) },
-                                leadingIcon = { Icon(Icons.Default.Delete, null, tint = RedColor, modifier = Modifier.size(15.dp)) },
-                                onClick = { showDeleteDialog = branch; showMenu = false },
-                            )
+                            if (!isDefault && !isCurrent) {
+                                DropdownMenuItem(
+                                    text = { Text("删除分支", fontSize = 13.sp, color = RedColor) },
+                                    leadingIcon = { Icon(Icons.Default.Delete, null, tint = RedColor, modifier = Modifier.size(15.dp)) },
+                                    onClick = { showDeleteDialog = branch; showMenu = false },
+                                )
+                            }
                         }
                     }
                 }
@@ -599,42 +1107,211 @@ fun BranchesTab(
     }
 }
 
+/**
+ * Pull Request标签页组件
+ * 
+ * @param state 仓库详情状态
+ * @param c 颜色主题
+ * @param onRefresh 刷新回调
+ */
 @Composable
-fun PRTab(prs: List<GHPullRequest>, c: GmColors) {
-    if (prs.isEmpty()) { EmptyBox("暂无 Pull Request"); return }
-    LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        items(prs, key = { it.number }) { pr ->
-            Column(Modifier.fillMaxWidth().background(c.bgCard, RoundedCornerShape(12.dp)).padding(12.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    GmBadge("#${pr.number}", GreenDim, Green)
-                    Text(pr.title, fontSize = 13.sp, color = c.textPrimary, modifier = Modifier.weight(1f))
-                }
-                Spacer(Modifier.height(6.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(pr.head.ref, fontSize = 11.sp, color = BlueColor, fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.background(BlueDim, RoundedCornerShape(4.dp)).padding(horizontal = 5.dp))
-                    Text("→", fontSize = 11.sp, color = c.textTertiary)
-                    Text(pr.base.ref, fontSize = 11.sp, color = c.textSecondary, fontFamily = FontFamily.Monospace)
-                    Spacer(Modifier.weight(1f))
-                    Text(pr.user.login, fontSize = 11.sp, color = c.textTertiary)
+fun PRTab(
+    state: RepoDetailState, 
+    c: GmColors,
+    onRefresh: () -> Unit = {},
+) {
+    val prs = state.prs
+    SwipeRefresh(
+        state = rememberSwipeRefreshState(isRefreshing = state.prsRefreshing),
+        onRefresh = onRefresh,
+        indicator = { state, trigger ->
+            com.google.accompanist.swiperefresh.SwipeRefreshIndicator(
+                state = state,
+                refreshTriggerDistance = trigger,
+                backgroundColor = c.bgCard,
+                contentColor = Coral
+            )
+        }
+    ) {
+        if (prs.isEmpty()) {
+            EmptyBox("暂无 Pull Request")
+        } else {
+            LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(prs, key = { it.number }) { pr ->
+                    Column(Modifier.fillMaxWidth().background(c.bgCard, RoundedCornerShape(12.dp)).padding(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            GmBadge("#${pr.number}", GreenDim, Green)
+                            Text(pr.title, fontSize = 13.sp, color = c.textPrimary, modifier = Modifier.weight(1f))
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(pr.head.ref, fontSize = 11.sp, color = BlueColor, fontFamily = FontFamily.Monospace,
+                                modifier = Modifier.background(BlueDim, RoundedCornerShape(4.dp)).padding(horizontal = 5.dp))
+                            Text("→", fontSize = 11.sp, color = c.textTertiary)
+                            Text(pr.base.ref, fontSize = 11.sp, color = c.textSecondary, fontFamily = FontFamily.Monospace)
+                            Spacer(Modifier.weight(1f))
+                            Text(pr.user.login, fontSize = 11.sp, color = c.textTertiary)
+                        }
+                    }
                 }
             }
         }
     }
 }
 
+/**
+ * Issues标签页组件
+ * 
+ * @param state 仓库详情状态
+ * @param c 颜色主题
+ * @param vm 仓库详情ViewModel
+ * @param onRefresh 刷新回调
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun IssuesTab(issues: List<GHIssue>, c: GmColors, vm: RepoDetailViewModel) {
-    val filtered = issues.filter { !it.isPR }
-    if (filtered.isEmpty()) { EmptyBox("暂无 Issues"); return }
-    LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        items(filtered, key = { it.number }) { issue ->
-            SwipeableIssueCard(
-                issue = issue,
-                c = c,
-                onDelete = { vm.deleteIssue(issue.number) }
+fun IssuesTab(
+    state: RepoDetailState, 
+    c: GmColors, 
+    vm: RepoDetailViewModel,
+    onRefresh: () -> Unit = {},
+    onIssueClick: (Int) -> Unit = {},
+) {
+    val filteredAndSorted = remember(state.issues, state.issueFilterState) {
+        filterAndSortIssues(state.issues, state.issueFilterState)
+    }
+    var showCreateIssueDialog by remember { mutableStateOf(false) }
+    
+    SwipeRefresh(
+        state = rememberSwipeRefreshState(isRefreshing = state.issuesRefreshing),
+        onRefresh = onRefresh,
+        indicator = { state, trigger ->
+            com.google.accompanist.swiperefresh.SwipeRefreshIndicator(
+                state = state,
+                refreshTriggerDistance = trigger,
+                backgroundColor = c.bgCard,
+                contentColor = Coral
             )
+        }
+    ) {
+        Column {
+            IssueFilterToolbar(
+                state = state,
+                c = c,
+                vm = vm,
+                onAddIssueClick = { showCreateIssueDialog = true }
+            )
+            
+            if (filteredAndSorted.isEmpty()) {
+                EmptyBox("暂无 Issues")
+            } else {
+                LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(filteredAndSorted, key = { it.number }) { issue ->
+                        SwipeableIssueCard(
+                            issue = issue,
+                            c = c,
+                            onDelete = { vm.deleteIssue(issue.number) },
+                            onClick = { onIssueClick(issue.number) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+    
+    if (showCreateIssueDialog) {
+        CreateIssueDialog(
+            c = c,
+            onConfirm = { title, body ->
+                vm.createIssue(title, body)
+                showCreateIssueDialog = false
+            },
+            onDismiss = { showCreateIssueDialog = false }
+        )
+    }
+}
+
+/**
+ * 创建Issue底部弹窗
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CreateIssueDialog(
+    c: GmColors,
+    onConfirm: (title: String, body: String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var title by remember { mutableStateOf("") }
+    var body by remember { mutableStateOf("") }
+    
+    val sheetState = rememberModalBottomSheetState(
+        skipPartiallyExpanded = true,
+        confirmValueChange = { it != SheetValue.PartiallyExpanded }
+    )
+    
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = c.bgCard,
+        dragHandle = { BottomSheetDefaults.DragHandle(color = c.border) },
+        sheetState = sheetState,
+        modifier = Modifier.fillMaxHeight()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                "创建新 Issue",
+                fontSize = 16.sp,
+                color = c.textPrimary,
+                fontWeight = FontWeight.SemiBold
+            )
+            GmDivider()
+            OutlinedTextField(
+                value = title,
+                onValueChange = { title = it },
+                label = { Text("标题") },
+                modifier = Modifier.fillMaxWidth(),
+                maxLines = 3,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = c.bgDeep,
+                    unfocusedContainerColor = c.bgDeep,
+                    focusedBorderColor = Coral,
+                    unfocusedBorderColor = c.border,
+                ),
+            )
+            OutlinedTextField(
+                value = body,
+                onValueChange = { body = it },
+                label = { Text("正文") },
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                minLines = 4,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = c.bgDeep,
+                    unfocusedContainerColor = c.bgDeep,
+                    focusedBorderColor = Coral,
+                    unfocusedBorderColor = c.border,
+                ),
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(onClick = onDismiss) {
+                    Text("取消", color = c.textSecondary)
+                }
+                TextButton(
+                    onClick = { onConfirm(title, body) },
+                    enabled = title.isNotBlank(),
+                ) {
+                    Text("创建", color = Coral)
+                }
+            }
         }
     }
 }
@@ -645,6 +1322,7 @@ private fun SwipeableIssueCard(
     issue: GHIssue,
     c: GmColors,
     onDelete: () -> Unit,
+    onClick: () -> Unit = {},
 ) {
     var showDeleteDialog by remember { mutableStateOf(false) }
 
@@ -679,7 +1357,7 @@ private fun SwipeableIssueCard(
             }
         },
     ) {
-        IssueCardContent(issue = issue, c = c)
+        IssueCardContent(issue = issue, c = c, onClick = onClick)
     }
 
     if (showDeleteDialog) {
@@ -694,17 +1372,81 @@ private fun SwipeableIssueCard(
 }
 
 @Composable
-private fun IssueCardContent(issue: GHIssue, c: GmColors) {
-    Row(
-        modifier = Modifier.fillMaxWidth().background(c.bgCard, RoundedCornerShape(12.dp)).padding(12.dp),
-        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
+private fun IssueCardContent(issue: GHIssue, c: GmColors, onClick: () -> Unit = {}) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(c.bgCard, RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Icon(Icons.Default.Circle, null,
-            tint = if (issue.state == "open") Green else RedColor, modifier = Modifier.size(10.dp))
-        Column(Modifier.weight(1f)) {
-            Text(issue.title, fontSize = 13.sp, color = c.textPrimary)
-            Text("#${issue.number} · ${issue.user.login}", fontSize = 11.sp,
-                color = c.textTertiary, modifier = Modifier.padding(top = 2.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Icon(
+                Icons.Default.Circle, 
+                null,
+                tint = if (issue.state == "open") Green else RedColor, 
+                modifier = Modifier.size(10.dp),
+            )
+            Text(
+                issue.title, 
+                fontSize = 13.sp, 
+                color = c.textPrimary,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        
+        if (issue.labels.isNotEmpty()) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+            ) {
+                issue.labels.forEach { label ->
+                    val labelColor = try {
+                        Color(android.graphics.Color.parseColor("#${label.color}"))
+                    } catch (_: Exception) {
+                        Coral
+                    }
+                    val textColor = if (isColorLight(labelColor)) Color.Black else Color.White
+                    
+                    Surface(
+                        color = labelColor,
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Text(
+                            label.name,
+                            fontSize = 10.sp,
+                            color = textColor,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                            maxLines = 1,
+                        )
+                    }
+                }
+            }
+        }
+        
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "#${issue.number} · ${issue.user.login}",
+                fontSize = 11.sp,
+                color = c.textTertiary,
+            )
+            Text(
+                "·",
+                fontSize = 11.sp,
+                color = c.textTertiary,
+            )
+            Text(
+                formatDate(issue.createdAt),
+                fontSize = 11.sp,
+                color = c.textTertiary,
+            )
         }
     }
 }
@@ -779,18 +1521,43 @@ private fun DeleteIssueDialog(
 
 // ─── Releases Tab ─────────────────────────────────────────────────────
 
+/**
+ * 发行版标签页组件
+ * 
+ * @param state 仓库详情状态
+ * @param c 颜色主题
+ * @param onRefresh 刷新回调
+ */
 @Composable
-fun ReleasesTab(releases: List<GHRelease>, c: GmColors) {
-    if (releases.isEmpty()) {
-        EmptyBox("暂无发行版")
-        return
-    }
-    LazyColumn(
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+fun ReleasesTab(
+    state: RepoDetailState, 
+    c: GmColors,
+    onRefresh: () -> Unit = {},
+) {
+    val releases = state.releases
+    SwipeRefresh(
+        state = rememberSwipeRefreshState(isRefreshing = state.releasesRefreshing),
+        onRefresh = onRefresh,
+        indicator = { state, trigger ->
+            com.google.accompanist.swiperefresh.SwipeRefreshIndicator(
+                state = state,
+                refreshTriggerDistance = trigger,
+                backgroundColor = c.bgCard,
+                contentColor = Coral
+            )
+        }
     ) {
-        items(releases, key = { it.id }) { release ->
-            ReleaseCard(release = release, c = c)
+        if (releases.isEmpty()) {
+            EmptyBox("暂无发行版")
+        } else {
+            LazyColumn(
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(releases, key = { it.id }) { release ->
+                    ReleaseCard(release = release, c = c)
+                }
+            }
         }
     }
 }
@@ -856,12 +1623,23 @@ fun ReleaseCard(release: GHRelease, c: GmColors) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+/**
+ * Actions标签页组件
+ * 
+ * @param state 仓库详情状态
+ * @param c 颜色主题
+ * @param vm 仓库详情ViewModel
+ * @param owner 仓库所有者
+ * @param repoName 仓库名称
+ * @param onRefresh 刷新回调
+ */
 fun ActionsTab(
     state: RepoDetailState,
     c: GmColors,
     vm: RepoDetailViewModel,
     owner: String,
     repoName: String,
+    onRefresh: () -> Unit = {},
 ) {
     var showDispatchDialog by remember { mutableStateOf<GHWorkflow?>(null) }
     var showDeleteDialog by remember { mutableStateOf<GHWorkflowRun?>(null) }
@@ -873,141 +1651,160 @@ fun ActionsTab(
         } ?: vm.clearWorkflowInputs()
     }
 
-    if (state.selectedWorkflow != null) {
-        // 工作流详情页面
-        Column(Modifier.fillMaxSize()) {
-            // 顶部返回栏
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowBack,
-                    null,
-                    tint = c.textPrimary,
-                    modifier = Modifier
-                        .size(20.dp)
-                        .clickable { vm.clearSelectedWorkflow() }
-                )
-                Spacer(Modifier.width(12.dp))
-                Column {
-                    Text(
-                        state.selectedWorkflow!!.name,
-                        fontSize = 16.sp,
-                        color = c.textPrimary,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        state.selectedWorkflow!!.path,
-                        fontSize = 11.sp,
-                        color = c.textTertiary
-                    )
-                }
-                Spacer(Modifier.weight(1f))
-                if (state.selectedWorkflow!!.state == "active") {
-                    Button(
-                        onClick = { showDispatchDialog = state.selectedWorkflow },
-                        colors = ButtonDefaults.buttonColors(containerColor = Coral)
-                    ) {
-                        Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("运行")
-                    }
-                }
-            }
-            GmDivider()
-
-            // 运行记录列表
-            LazyColumn(
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.weight(1f)
-            ) {
-                if (state.workflowRuns.isEmpty()) {
-                    item {
-                        Box(Modifier.fillMaxWidth().padding(vertical = 32.dp), contentAlignment = Alignment.Center) {
-                            Text("暂无运行记录", fontSize = 13.sp, color = c.textTertiary)
-                        }
-                    }
-                } else {
-                    items(state.workflowRuns, key = { it.id }) { run ->
-                        WorkflowRunItem(
-                            run = run,
-                            c = c,
-                            onClick = { vm.selectWorkflowRun(run) },
-                            onRerun = { vm.rerunWorkflow(run.id) },
-                            onCancel = { vm.cancelWorkflow(run.id) },
-                            onDelete = { showDeleteDialog = run }
-                        )
-                    }
-                }
-            }
+    LaunchedEffect(state.selectedWorkflow) {
+        if (state.selectedWorkflow == null) {
+            workflowsExpanded = false
         }
-    } else {
-        // 默认页面：显示所有工作流 + 所有运行记录
-        Column(Modifier.fillMaxSize()) {
-            // 工作流列表
-            if (state.workflows.isNotEmpty()) {
-                Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                    Text("工作流", fontSize = 12.sp, color = c.textTertiary, fontWeight = FontWeight.Medium)
-                    Spacer(Modifier.height(4.dp))
-                    val visibleWorkflows = if (workflowsExpanded || state.workflows.size <= 2) {
-                        state.workflows
-                    } else {
-                        state.workflows.take(2)
-                    }
-                    visibleWorkflows.forEach { workflow ->
-                        WorkflowItem(
-                            workflow = workflow,
-                            c = c,
-                            onDispatch = { showDispatchDialog = workflow },
-                            onClick = { vm.selectWorkflow(workflow) },
-                            onRefresh = { vm.loadWorkflows() }
+    }
+
+    SwipeRefresh(
+        state = rememberSwipeRefreshState(isRefreshing = state.actionsRefreshing),
+        onRefresh = onRefresh,
+        indicator = { state, trigger ->
+            com.google.accompanist.swiperefresh.SwipeRefreshIndicator(
+                state = state,
+                refreshTriggerDistance = trigger,
+                backgroundColor = c.bgCard,
+                contentColor = Coral
+            )
+        }
+    ) {
+        if (state.selectedWorkflow != null) {
+            // 工作流详情页面
+            Column(Modifier.fillMaxSize()) {
+                // 顶部返回栏
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        null,
+                        tint = c.textPrimary,
+                        modifier = Modifier
+                            .size(20.dp)
+                            .clickable { vm.clearSelectedWorkflow() }
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            state.selectedWorkflow!!.name,
+                            fontSize = 16.sp,
+                            color = c.textPrimary,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            state.selectedWorkflow!!.path,
+                            fontSize = 11.sp,
+                            color = c.textTertiary
                         )
                     }
-                    if (state.workflows.size > 2) {
-                        TextButton(
-                            onClick = { workflowsExpanded = !workflowsExpanded },
-                            modifier = Modifier.fillMaxWidth()
+                    Spacer(Modifier.weight(1f))
+                    if (state.selectedWorkflow!!.state == "active") {
+                        Button(
+                            onClick = { showDispatchDialog = state.selectedWorkflow },
+                            colors = ButtonDefaults.buttonColors(containerColor = Coral)
                         ) {
-                            Text(
-                                if (workflowsExpanded) "收起" else "显示全部 (${state.workflows.size})",
-                                color = Coral
-                            )
+                            Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("运行")
                         }
                     }
                 }
                 GmDivider()
-            }
 
-            // 运行记录列表
-            LazyColumn(
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.weight(1f)
-            ) {
-                item {
-                    Text("运行记录", fontSize = 12.sp, color = c.textTertiary, fontWeight = FontWeight.Medium)
-                    Spacer(Modifier.height(4.dp))
-                }
-                if (state.workflowRuns.isEmpty()) {
-                    item {
-                        Box(Modifier.fillMaxWidth().padding(vertical = 32.dp), contentAlignment = Alignment.Center) {
-                            Text("暂无运行记录", fontSize = 13.sp, color = c.textTertiary)
+                // 运行记录列表
+                LazyColumn(
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    if (state.workflowRuns.isEmpty()) {
+                        item {
+                            Box(Modifier.fillMaxWidth().padding(vertical = 32.dp), contentAlignment = Alignment.Center) {
+                                Text("暂无运行记录", fontSize = 13.sp, color = c.textTertiary)
+                            }
+                        }
+                    } else {
+                        items(state.workflowRuns, key = { it.id }) { run ->
+                            WorkflowRunItem(
+                                run = run,
+                                c = c,
+                                onClick = { vm.selectWorkflowRun(run) },
+                                onRerun = { vm.rerunWorkflow(run.id) },
+                                onCancel = { vm.cancelWorkflow(run.id) },
+                                onDelete = { showDeleteDialog = run }
+                            )
                         }
                     }
-                } else {
-                    items(state.workflowRuns, key = { it.id }) { run ->
-                        WorkflowRunItem(
-                            run = run,
-                            c = c,
-                            onClick = { vm.selectWorkflowRun(run) },
-                            onRerun = { vm.rerunWorkflow(run.id) },
-                            onCancel = { vm.cancelWorkflow(run.id) },
-                            onDelete = { showDeleteDialog = run }
-                        )
+                }
+            }
+        } else {
+            // 默认页面：显示所有工作流 + 所有运行记录
+            Column(Modifier.fillMaxSize()) {
+                // 工作流列表
+                if (state.workflows.isNotEmpty()) {
+                    Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                        Text("工作流", fontSize = 12.sp, color = c.textTertiary, fontWeight = FontWeight.Medium)
+                        Spacer(Modifier.height(4.dp))
+                        val visibleWorkflows = if (workflowsExpanded || state.workflows.size <= 2) {
+                            state.workflows
+                        } else {
+                            state.workflows.take(2)
+                        }
+                        visibleWorkflows.forEach { workflow ->
+                            WorkflowItem(
+                                workflow = workflow,
+                                c = c,
+                                onDispatch = { showDispatchDialog = workflow },
+                                onClick = { vm.selectWorkflow(workflow) },
+                                onRefresh = { vm.loadWorkflows() }
+                            )
+                        }
+                        if (state.workflows.size > 2) {
+                            TextButton(
+                                onClick = { workflowsExpanded = !workflowsExpanded },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    if (workflowsExpanded) "收起" else "显示全部 (${state.workflows.size})",
+                                    color = Coral
+                                )
+                            }
+                        }
+                    }
+                    GmDivider()
+                }
+
+                // 运行记录列表
+                LazyColumn(
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    item {
+                        Text("运行记录", fontSize = 12.sp, color = c.textTertiary, fontWeight = FontWeight.Medium)
+                        Spacer(Modifier.height(4.dp))
+                    }
+                    if (state.workflowRuns.isEmpty()) {
+                        item {
+                            Box(Modifier.fillMaxWidth().padding(vertical = 32.dp), contentAlignment = Alignment.Center) {
+                                Text("暂无运行记录", fontSize = 13.sp, color = c.textTertiary)
+                            }
+                        }
+                    } else {
+                        items(state.workflowRuns, key = { it.id }) { run ->
+                            WorkflowRunItem(
+                                run = run,
+                                c = c,
+                                onClick = { vm.selectWorkflowRun(run) },
+                                onRerun = { vm.rerunWorkflow(run.id) },
+                                onCancel = { vm.cancelWorkflow(run.id) },
+                                onDelete = { showDeleteDialog = run }
+                            )
+                        }
                     }
                 }
             }
@@ -1550,14 +2347,20 @@ fun JobCard(job: GHWorkflowJob, c: GmColors) {
         else -> c.textTertiary
     }
     val jobStatusText = job.status ?: "unknown"
+    var expanded by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .background(c.bgItem, RoundedCornerShape(8.dp))
-            .padding(10.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded }
+                .padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Box(
                 modifier = Modifier
                     .size(8.dp)
@@ -1566,19 +2369,38 @@ fun JobCard(job: GHWorkflowJob, c: GmColors) {
             Spacer(Modifier.width(8.dp))
             Text(job.name ?: "Job", fontSize = 13.sp, color = c.textPrimary, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
             GmBadge(jobStatusText, statusColor.copy(alpha = 0.15f), statusColor)
-        }
-        Spacer(Modifier.height(8.dp))
-        GmDivider()
-        Spacer(Modifier.height(8.dp))
-        job.steps?.let { steps ->
-            steps.forEach { step ->
-                StepRow(
-                    step = step,
-                    c = c,
-                    jobHtmlUrl = job.htmlUrl
+            Spacer(Modifier.width(4.dp))
+            androidx.compose.animation.AnimatedContent(
+                targetState = expanded,
+                label = "expand_icon"
+            ) { isExpanded ->
+                Icon(
+                    imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = if (isExpanded) "收起" else "展开",
+                    tint = c.textTertiary,
+                    modifier = Modifier.size(20.dp)
                 )
             }
-        } ?: Text("暂无步骤信息", fontSize = 12.sp, color = c.textTertiary)
+        }
+        androidx.compose.animation.AnimatedVisibility(
+            visible = expanded,
+            enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.expandVertically(),
+            exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.shrinkVertically()
+        ) {
+            Column {
+                GmDivider()
+                Spacer(Modifier.height(8.dp))
+                job.steps?.let { steps ->
+                    steps.forEach { step ->
+                        StepRow(
+                            step = step,
+                            c = c,
+                            jobHtmlUrl = job.htmlUrl
+                        )
+                    }
+                } ?: Text("暂无步骤信息", fontSize = 12.sp, color = c.textTertiary, modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp))
+            }
+        }
     }
 }
 
@@ -2134,6 +2956,11 @@ private fun formatDate(iso: String): String = try {
     odt.toLocalDateTime().format(dateFormatter)
 } catch (_: Exception) {
     iso
+}
+
+private fun isColorLight(color: Color): Boolean {
+    val luminance = 0.299 * color.red + 0.587 * color.green + 0.114 * color.blue
+    return luminance > 0.5
 }
 
 // ─── 分支相关弹窗 ─────────────────────────────────────────────────────────────

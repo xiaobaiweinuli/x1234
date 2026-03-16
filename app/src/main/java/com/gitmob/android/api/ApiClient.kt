@@ -6,12 +6,18 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import okhttp3.ConnectionPool
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Response
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
+import java.io.IOException
+import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLException
 
 object ApiClient {
 
@@ -19,6 +25,7 @@ object ApiClient {
     private const val TAG = "ApiClient"
     private lateinit var tokenStorage: TokenStorage
     private var _api: GitHubApi? = null
+    private var _okHttpClient: OkHttpClient? = null
 
     val api: GitHubApi get() = _api ?: error("ApiClient not initialized")
 
@@ -29,6 +36,71 @@ object ApiClient {
     fun init(storage: TokenStorage) {
         tokenStorage = storage
         rebuild()
+    }
+
+    /**
+     * 清理连接池，在网络切换时调用
+     */
+    fun clearConnectionPool() {
+        _okHttpClient?.connectionPool?.evictAll()
+        LogManager.i(TAG, "连接池已清理")
+    }
+
+    /**
+     * 自定义重试拦截器
+     * 自动重试网络连接失败的请求（最多3次）
+     */
+    private class RetryInterceptor : Interceptor {
+        companion object {
+            private const val MAX_RETRIES = 3
+        }
+
+        override fun intercept(chain: Interceptor.Chain): Response {
+            var request = chain.request()
+            var response: Response? = null
+            var exception: IOException? = null
+            var retryCount = 0
+
+            while (retryCount < MAX_RETRIES) {
+                try {
+                    response = chain.proceed(request)
+                    if (response.isSuccessful) {
+                        return response
+                    }
+                    // 如果是服务器错误（5xx），可以重试
+                    if (response.code >= 500) {
+                        response.close()
+                        retryCount++
+                        LogManager.w(TAG, "服务器错误 ${response.code}，正在重试 ($retryCount/$MAX_RETRIES)")
+                        Thread.sleep(1000L * retryCount) // 指数退避
+                        continue
+                    }
+                    return response
+                } catch (e: IOException) {
+                    exception = e
+                    // 只重试网络相关的异常
+                    if (e is SocketTimeoutException || 
+                        e is SSLException || 
+                        e.message?.contains("Connection reset") == true ||
+                        e.message?.contains("Connection closed") == true ||
+                        e.message?.contains("Required SETTINGS preface not received") == true) {
+                        retryCount++
+                        LogManager.w(TAG, "网络异常：${e.message}，正在重试 ($retryCount/$MAX_RETRIES)")
+                        if (retryCount < MAX_RETRIES) {
+                            Thread.sleep(1000L * retryCount) // 指数退避
+                            continue
+                        }
+                    }
+                    break
+                }
+            }
+
+            // 如果重试完还是失败，抛出最后一个异常
+            if (exception != null) {
+                throw exception
+            }
+            return response!!
+        }
     }
 
     fun rebuild() {
@@ -54,16 +126,21 @@ object ApiClient {
             level = HttpLoggingInterceptor.Level.BASIC
         }
 
-        val client = OkHttpClient.Builder()
+        _okHttpClient = OkHttpClient.Builder()
+            .addInterceptor(RetryInterceptor())
             .addInterceptor(authInterceptor)
             .addInterceptor(logging)
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
+            .connectionPool(ConnectionPool(10, 2, TimeUnit.MINUTES))
+            .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
             .build()
 
         _api = Retrofit.Builder()
             .baseUrl(BASE_URL)
-            .client(client)
+            .client(_okHttpClient!!)
             .addConverterFactory(GsonConverterFactory.create())
             .build()
             .create(GitHubApi::class.java)

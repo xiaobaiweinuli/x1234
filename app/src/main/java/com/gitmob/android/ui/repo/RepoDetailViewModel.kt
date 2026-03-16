@@ -48,7 +48,48 @@ data class RepoDetailState(
     val workflowLogsLoading: Boolean = false,
     val workflowInputs: List<WorkflowInput> = emptyList(),
     val workflowInputsLoading: Boolean = false,
+    // 各Tab刷新状态
+    val filesRefreshing: Boolean = false,
+    val commitsRefreshing: Boolean = false,
+    val branchesRefreshing: Boolean = false,
+    val actionsRefreshing: Boolean = false,
+    val releasesRefreshing: Boolean = false,
+    val prsRefreshing: Boolean = false,
+    val issuesRefreshing: Boolean = false,
+    // Issues筛选状态
+    val issueFilterState: IssueFilterState = IssueFilterState(),
 )
+
+/**
+ * Issue筛选状态
+ */
+data class IssueFilterState(
+    val status: IssueStatusFilter = IssueStatusFilter.OPEN,
+    val sortBy: IssueSortBy = IssueSortBy.NEWEST,
+    val selectedLabels: Set<String> = emptySet(),
+    val selectedAuthors: Set<String> = emptySet(),
+    val selectedAssignees: Set<String> = emptySet(),
+    val selectedMilestones: Set<String> = emptySet(),
+)
+
+/**
+ * Issue状态筛选
+ */
+enum class IssueStatusFilter(val displayName: String) {
+    OPEN("打开"),
+    CLOSED("关闭"),
+    ALL("所有");
+}
+
+/**
+ * Issue排序方式
+ */
+enum class IssueSortBy(val displayName: String) {
+    NEWEST("最新"),
+    OLDEST("最早"),
+    MOST_COMMENTS("最多评论"),
+    LEAST_COMMENTS("最少评论");
+}
 
 /** Reset / Revert 操作结果 */
 data class GitOpResult(
@@ -112,14 +153,14 @@ class RepoDetailViewModel(app: Application, savedStateHandle: SavedStateHandle) 
     }
 
     fun loadContents(path: String, ref: String? = null, forceRefresh: Boolean = false) = viewModelScope.launch {
-        _state.update { it.copy(contentsLoading = true) }
+        _state.update { it.copy(contentsLoading = true, filesRefreshing = forceRefresh) }
         try {
             val branch = ref ?: _state.value.currentBranch
             val contents = repository.getContents(owner, repoName, path, branch, forceRefresh)
                 .sortedWith(compareBy({ it.type != "dir" }, { it.name }))
-            _state.update { it.copy(contents = contents, currentPath = path, contentsLoading = false) }
+            _state.update { it.copy(contents = contents, currentPath = path, contentsLoading = false, filesRefreshing = false) }
         } catch (e: Exception) {
-            _state.update { it.copy(contentsLoading = false) }
+            _state.update { it.copy(contentsLoading = false, filesRefreshing = false) }
         }
     }
 
@@ -130,11 +171,14 @@ class RepoDetailViewModel(app: Application, savedStateHandle: SavedStateHandle) 
     }
 
     fun loadCommits(sha: String? = null, forceRefresh: Boolean = false) = viewModelScope.launch {
+        _state.update { it.copy(commitsRefreshing = forceRefresh) }
         try {
             val ref = sha ?: _state.value.currentBranch
             val commits = repository.getCommits(owner, repoName, ref, forceRefresh)
-            _state.update { it.copy(commits = commits) }
-        } catch (_: Exception) {}
+            _state.update { it.copy(commits = commits, commitsRefreshing = false) }
+        } catch (_: Exception) {
+            _state.update { it.copy(commitsRefreshing = false) }
+        }
     }
 
     private fun loadPRsAndIssues() = viewModelScope.launch {
@@ -143,6 +187,39 @@ class RepoDetailViewModel(app: Application, savedStateHandle: SavedStateHandle) 
             val issues = repository.getIssues(owner, repoName)
             _state.update { it.copy(prs = prs, issues = issues) }
         } catch (_: Exception) {}
+    }
+
+    /** 刷新分支列表 */
+    fun refreshBranches() = viewModelScope.launch {
+        _state.update { it.copy(branchesRefreshing = true) }
+        try {
+            val branches = repository.getBranches(owner, repoName, forceRefresh = true)
+            _state.update { it.copy(branches = branches, branchesRefreshing = false) }
+        } catch (_: Exception) {
+            _state.update { it.copy(branchesRefreshing = false) }
+        }
+    }
+
+    /** 刷新PR列表 */
+    fun refreshPRs() = viewModelScope.launch {
+        _state.update { it.copy(prsRefreshing = true) }
+        try {
+            val prs = repository.getPRs(owner, repoName)
+            _state.update { it.copy(prs = prs, prsRefreshing = false) }
+        } catch (_: Exception) {
+            _state.update { it.copy(prsRefreshing = false) }
+        }
+    }
+
+    /** 刷新Issues列表 */
+    fun refreshIssues() = viewModelScope.launch {
+        _state.update { it.copy(issuesRefreshing = true) }
+        try {
+            val issues = repository.getIssues(owner, repoName)
+            _state.update { it.copy(issues = issues, issuesRefreshing = false) }
+        } catch (_: Exception) {
+            _state.update { it.copy(issuesRefreshing = false) }
+        }
     }
 
     fun deleteIssue(issueNumber: Int) = viewModelScope.launch {
@@ -155,6 +232,116 @@ class RepoDetailViewModel(app: Application, savedStateHandle: SavedStateHandle) 
             }
         } catch (e: Exception) {
             _state.update { it.copy(toast = "删除失败：${e.message}") }
+        }
+    }
+
+    /**
+     * 获取所有可用的标签
+     */
+    fun getAllLabels(): Set<String> {
+        return _state.value.issues.flatMap { it.labels }.map { it.name }.toSet()
+    }
+
+    /**
+     * 获取所有作者
+     */
+    fun getAllAuthors(): Set<String> {
+        return _state.value.issues.map { it.user.login }.toSet()
+    }
+
+    /**
+     * 获取所有受理人
+     */
+    fun getAllAssignees(): Set<String> {
+        return emptySet()
+    }
+
+    /**
+     * 获取所有里程碑
+     */
+    fun getAllMilestones(): Set<String> {
+        return emptySet()
+    }
+
+    /**
+     * 设置Issue状态筛选
+     */
+    fun setIssueStatusFilter(status: IssueStatusFilter) {
+        _state.update { it.copy(issueFilterState = it.issueFilterState.copy(status = status)) }
+    }
+
+    /**
+     * 设置Issue排序方式
+     */
+    fun setIssueSortBy(sortBy: IssueSortBy) {
+        _state.update { it.copy(issueFilterState = it.issueFilterState.copy(sortBy = sortBy)) }
+    }
+
+    /**
+     * 切换标签选择
+     */
+    fun toggleIssueLabel(label: String) {
+        _state.update {
+            val current = it.issueFilterState.selectedLabels
+            val newSet = if (current.contains(label)) current - label else current + label
+            it.copy(issueFilterState = it.issueFilterState.copy(selectedLabels = newSet))
+        }
+    }
+
+    /**
+     * 切换作者选择
+     */
+    fun toggleIssueAuthor(author: String) {
+        _state.update {
+            val current = it.issueFilterState.selectedAuthors
+            val newSet = if (current.contains(author)) current - author else current + author
+            it.copy(issueFilterState = it.issueFilterState.copy(selectedAuthors = newSet))
+        }
+    }
+
+    /**
+     * 切换受理人选择
+     */
+    fun toggleIssueAssignee(assignee: String) {
+        _state.update {
+            val current = it.issueFilterState.selectedAssignees
+            val newSet = if (current.contains(assignee)) current - assignee else current + assignee
+            it.copy(issueFilterState = it.issueFilterState.copy(selectedAssignees = newSet))
+        }
+    }
+
+    /**
+     * 切换里程碑选择
+     */
+    fun toggleIssueMilestone(milestone: String) {
+        _state.update {
+            val current = it.issueFilterState.selectedMilestones
+            val newSet = if (current.contains(milestone)) current - milestone else current + milestone
+            it.copy(issueFilterState = it.issueFilterState.copy(selectedMilestones = newSet))
+        }
+    }
+
+    /**
+     * 清除所有筛选条件
+     */
+    fun clearIssueFilters() {
+        _state.update { it.copy(issueFilterState = IssueFilterState()) }
+    }
+
+    /**
+     * 创建新的Issue
+     */
+    fun createIssue(title: String, body: String) = viewModelScope.launch {
+        try {
+            val newIssue = repository.createIssue(owner, repoName, title, body.ifBlank { null })
+            _state.update {
+                it.copy(
+                    issues = listOf(newIssue) + it.issues,
+                    toast = "Issue创建成功"
+                )
+            }
+        } catch (e: Exception) {
+            _state.update { it.copy(toast = "创建失败：${e.message}") }
         }
     }
 
@@ -389,12 +576,40 @@ class RepoDetailViewModel(app: Application, savedStateHandle: SavedStateHandle) 
         } catch (_: Exception) {}
     }
 
+    /** 刷新Releases列表 */
+    fun refreshReleases() = viewModelScope.launch {
+        _state.update { it.copy(releasesRefreshing = true) }
+        try {
+            val releases = repository.getReleases(owner, repoName)
+            _state.update { it.copy(releases = releases, releasesRefreshing = false) }
+        } catch (_: Exception) {
+            _state.update { it.copy(releasesRefreshing = false) }
+        }
+    }
+
     // ─── GitHub Actions ───────────────────────────────────────────────────────
     fun loadWorkflows() = viewModelScope.launch {
         try {
             val workflows = repository.getWorkflows(owner, repoName)
             _state.update { it.copy(workflows = workflows) }
         } catch (_: Exception) {}
+    }
+
+    /** 刷新Actions工作流和运行记录 */
+    fun refreshActions() = viewModelScope.launch {
+        _state.update { it.copy(actionsRefreshing = true) }
+        try {
+            val workflows = repository.getWorkflows(owner, repoName)
+            val runs = repository.getWorkflowRuns(owner, repoName, null)
+            _state.update { it.copy(
+                workflows = workflows,
+                allWorkflowRuns = runs,
+                workflowRuns = runs,
+                actionsRefreshing = false
+            )}
+        } catch (_: Exception) {
+            _state.update { it.copy(actionsRefreshing = false) }
+        }
     }
 
     fun loadWorkflowRuns(workflowId: Long? = null) = viewModelScope.launch {

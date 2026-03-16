@@ -57,8 +57,10 @@ fun SettingsScreen(
     tokenStorage: TokenStorage,
     currentTheme: ThemeMode,
     rootEnabled: Boolean,
+    tabStepBackEnabled: Boolean,
     onThemeChange: (ThemeMode) -> Unit,
     onRootToggle: (Boolean) -> Unit,
+    onTabStepBackToggle: (Boolean) -> Unit,
     onBack: () -> Unit,
     onLogout: () -> Unit,
 ) {
@@ -236,6 +238,38 @@ fun SettingsScreen(
                     Text(msg, fontSize = 12.sp,
                         color = if (msg.startsWith("✓")) Green else Yellow,
                         modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp))
+                }
+
+                SDivider(c)
+
+                // 仓库详情Tab逐级返回开关
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    SIconBox(
+                        color = if (tabStepBackEnabled) BlueDim else c.bgItem,
+                        icon = Icons.AutoMirrored.Filled.ArrowBack,
+                        tint = if (tabStepBackEnabled) BlueColor else c.textTertiary,
+                    )
+                    Column(Modifier.weight(1f)) {
+                        Text("仓库详情Tab逐级返回", fontSize = 15.sp, color = c.textPrimary, fontWeight = FontWeight.Medium)
+                        Text(
+                            if (tabStepBackEnabled) "已启用 · 标签页按顺序逐级返回"
+                            else "关闭 · 非文件Tab先返回文件Tab",
+                            fontSize = 12.sp, color = c.textSecondary,
+                        )
+                    }
+                    Switch(
+                        checked = tabStepBackEnabled, onCheckedChange = onTabStepBackToggle,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = BlueColor,
+                            uncheckedThumbColor = c.textTertiary,
+                            uncheckedTrackColor = c.bgItem,
+                        ),
+                    )
                 }
 
                 SDivider(c)

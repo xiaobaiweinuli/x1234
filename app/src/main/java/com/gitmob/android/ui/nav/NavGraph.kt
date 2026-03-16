@@ -28,6 +28,8 @@ import com.gitmob.android.ui.local.LocalRepoViewModel
 import com.gitmob.android.ui.filepicker.FilePickerScreen
 import com.gitmob.android.ui.filepicker.PickerMode
 import com.gitmob.android.ui.login.LoginScreen
+import com.gitmob.android.ui.repo.IssueDetailScreen
+import com.gitmob.android.ui.repo.IssueDetailViewModel
 import com.gitmob.android.ui.repo.RepoDetailScreen
 import com.gitmob.android.ui.repo.RepoDetailViewModel
 import com.gitmob.android.ui.repos.RepoListScreen
@@ -52,6 +54,9 @@ sealed class Route(val path: String) {
         fun go(owner: String, repo: String, path: String, branch: String) =
             "file/$owner/$repo/$branch?path=${URLEncoder.encode(path, "UTF-8")}"
     }
+    object IssueDetail : Route("issue/{owner}/{repo}/{issueNumber}") {
+        fun go(owner: String, repo: String, issueNumber: Int) = "issue/$owner/$repo/$issueNumber"
+    }
 }
 
 sealed class BottomTab(val route: String, val label: String, val icon: ImageVector) {
@@ -71,6 +76,7 @@ fun AppNavGraph(
     var isReauth   by remember { mutableStateOf(false) }
     val currentTheme by tokenStorage.themeMode.collectAsState(initial = ThemeMode.LIGHT)
     val rootEnabled by tokenStorage.rootEnabled.collectAsState(initial = false)
+    val tabStepBackEnabled by tokenStorage.tabStepBack.collectAsState(initial = false)
 
     // 监听 401 Token 失效事件（OAuth App 管理员主动撤销时）
     LaunchedEffect(Unit) {
@@ -144,9 +150,13 @@ fun AppNavGraph(
             val repo  = back.arguments?.getString("repo")  ?: ""
             RepoDetailScreen(
                 owner = owner, repoName = repo,
+                tabStepBackEnabled = tabStepBackEnabled,
                 onBack = { navController.popBackStack() },
                 onFileClick = { o, r, path, branch ->
                     navController.navigate(Route.FileViewer.go(o, r, path, branch))
+                },
+                onIssueClick = { issueNumber ->
+                    navController.navigate(Route.IssueDetail.go(owner, repo, issueNumber))
                 },
                 vm = viewModel(factory = RepoDetailViewModel.factory(owner, repo)),
             )
@@ -167,6 +177,25 @@ fun AppNavGraph(
             val path   = URLDecoder.decode(back.arguments?.getString("path") ?: "", "UTF-8")
             FileViewerScreen(owner = owner, repo = repo, path = path, ref = branch,
                 onBack = { navController.popBackStack() })
+        }
+
+        composable(
+            route = "issue/{owner}/{repo}/{issueNumber}",
+            arguments = listOf(
+                navArgument("owner") { type = NavType.StringType },
+                navArgument("repo") { type = NavType.StringType },
+                navArgument("issueNumber") { type = NavType.IntType },
+            ),
+        ) { back ->
+            val owner = back.arguments?.getString("owner") ?: ""
+            val repo = back.arguments?.getString("repo") ?: ""
+            val issueNumber = back.arguments?.getInt("issueNumber") ?: 0
+            IssueDetailScreen(
+                owner = owner,
+                repoName = repo,
+                issueNumber = issueNumber,
+                onBack = { navController.popBackStack() },
+            )
         }
     }
 }
@@ -226,13 +255,18 @@ private fun MainScreen(
                 composable(BottomTab.Settings.route) {
                     val settingsScope = rememberCoroutineScope()
                     val rootEnabled2 by tokenStorage.rootEnabled.collectAsState(initial = false)
+                    val tabStepBackEnabled by tokenStorage.tabStepBack.collectAsState(initial = false)
                     SettingsScreen(
                         tokenStorage  = tokenStorage,
                         currentTheme  = currentTheme,
                         rootEnabled   = rootEnabled2,
+                        tabStepBackEnabled = tabStepBackEnabled,
                         onThemeChange = onThemeChange,
                         onRootToggle  = { enabled ->
                             settingsScope.launch { tokenStorage.setRootEnabled(enabled) }
+                        },
+                        onTabStepBackToggle = { enabled ->
+                            settingsScope.launch { tokenStorage.setTabStepBack(enabled) }
                         },
                         onBack   = { /* 底部 tab，无需返回 */ },
                         onLogout = {
