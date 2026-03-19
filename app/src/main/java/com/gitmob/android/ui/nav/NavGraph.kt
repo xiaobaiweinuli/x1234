@@ -97,9 +97,15 @@ fun AppNavGraph(
     val rootEnabled by tokenStorage.rootEnabled.collectAsState(initial = false)
     val tabStepBackEnabled by tokenStorage.tabStepBack.collectAsState(initial = false)
 
-    // 用 collectAsState(null) 替代 LaunchedEffect + .first()
-    // DataStore 第一帧通常 <16ms 即可发射，避免一整帧的 null 白屏闪烁
+    // 账户加载状态：初始为 loading，DataStore 加载完成后更新
+    var isLoading by remember { mutableStateOf(true) }
     val tokenState by tokenStorage.accessToken.collectAsState(initial = null)
+
+    // 监听 tokenState 变化，确定 DataStore 是否已加载
+    LaunchedEffect(tokenState) {
+        // 只要 tokenState 不是 null（无论是有值还是空字符串），说明 DataStore 已加载完成
+        isLoading = false
+    }
 
     // 监听 401 Token 失效事件
     LaunchedEffect(Unit) {
@@ -108,10 +114,19 @@ fun AppNavGraph(
         }
     }
 
-    // 首次收到 token 值前不渲染任何内容（DataStore 通常 <16ms）
-    // tokenState: null = 等待首次 emit（initial），非 null = DataStore 真实值
-    // Flow<String?> 中键不存在时 emit null，所以：null→Login，有值→Main
-    if (tokenState == null) return   // 首帧 initial，跳过渲染避免闪烁
+    // 加载中显示 LoadingBox
+    if (isLoading) {
+        val c = LocalGmColors.current
+        androidx.compose.material3.Surface(
+            color = c.bgDeep,
+            modifier = Modifier.fillMaxSize()
+        ) {
+            com.gitmob.android.ui.common.LoadingBox()
+        }
+        return
+    }
+
+    // 确定起始目的地
     val startDest = if (tokenState.isNullOrBlank()) Route.Login.path else Route.Main.path
 
     NavHost(navController = navController, startDestination = startDest) {
