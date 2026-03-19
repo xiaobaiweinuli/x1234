@@ -29,5 +29,7 @@ data class LocalRepo(
     val aheadCount: Int = 0,
     @SerializedName("behind_count")
     val behindCount: Int = 0,
+    @SerializedName("changed_files_count")
+    val changedFilesCount: Int? = null,    // 变动文件数量，null 表示无变动
     val error: String? = null,
 )

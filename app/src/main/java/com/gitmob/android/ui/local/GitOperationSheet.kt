@@ -1,5 +1,7 @@
 package com.gitmob.android.ui.local
 
+
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -19,6 +21,15 @@ import androidx.compose.ui.unit.sp
 import com.gitmob.android.local.LocalRepo
 import com.gitmob.android.local.LocalRepoStatus
 import com.gitmob.android.ui.theme.*
+
+
+sealed class PushWizardStep {
+    object None          : PushWizardStep()
+    object SelectRemote  : PushWizardStep()
+    data class Running(val log: List<String> = emptyList()) : PushWizardStep()
+    data class Done(val log: List<String>, val success: Boolean) : PushWizardStep()
+}
+
 
 /**
  * 一键上云向导 BottomSheet

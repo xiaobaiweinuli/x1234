@@ -1,5 +1,8 @@
+@file:OptIn(ExperimentalMaterial3Api::class)
+
 package com.gitmob.android.ui.repo
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.animation.animateColorAsState
@@ -15,6 +18,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -25,44 +29,149 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.border
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import com.gitmob.android.api.*
 import com.gitmob.android.ui.common.*
 import com.gitmob.android.ui.theme.*
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.border
+import com.gitmob.android.util.LogManager
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import androidx.compose.runtime.rememberCoroutineScope
-import kotlinx.coroutines.launch
+import java.time.OffsetDateTime
+import java.time.format.DateTimeFormatter
+import androidx.compose.ui.draw.clip
+import dev.jeziellago.compose.markdowntext.MarkdownText
+import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Article
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.NotificationsNone
+import androidx.compose.material.icons.filled.NotificationsOff
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.runtime.snapshots.SnapshotStateMap
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.material.icons.filled.Undo
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.foundation.layout.defaultMinSize
+import okhttp3.Request
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RepoDetailScreen(
     owner: String,
     repoName: String,
+    tabStepBackEnabled: Boolean,
     onBack: () -> Unit,
     onFileClick: (String, String, String, String) -> Unit,
+    onIssueClick: (Int) -> Unit = {},
     vm: RepoDetailViewModel = viewModel(factory = RepoDetailViewModel.factory(owner, repoName)),
 ) {
     val c = LocalGmColors.current
     val state by vm.state.collectAsState()
-    val tabs = listOf("文件", "提交", "分支", "PR", "Issues")
+    val tabs = listOf("文件", "提交", "分支", "操作", "发行版", "PR", "Issues")
     var showBranchDialog by remember { mutableStateOf(false) }
     var showNewBranchDialog by remember { mutableStateOf(false) }
+    var showSettingsMenu by remember { mutableStateOf(false) }
+    var showRenameDialog by remember { mutableStateOf(false) }
+    var showEditDialog by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    var showVisibilityDialog by remember { mutableStateOf(false) }
+    var showTransferDialog by remember { mutableStateOf(false) }
+    var showCreateFileDialog by remember { mutableStateOf(false) }
+    var showWatchSheet by remember { mutableStateOf(false) }
+    var newFileName by remember { mutableStateOf("") }
+    var newFileContent by remember { mutableStateOf("") }
+    var showCommitMessageDialog by remember { mutableStateOf(false) }
+    var commitMessage by remember { mutableStateOf("") }
+    var selectedFileForMenu by remember { mutableStateOf<GHContent?>(null) }
+    
+    var showRenameFileDialog by remember { mutableStateOf(false) }
+    var showDeleteFileDialog by remember { mutableStateOf(false) }
+    var renameFileNewName by remember { mutableStateOf("") }
+    val context = LocalContext.current
 
     state.toast?.let { msg ->
         LaunchedEffect(msg) { kotlinx.coroutines.delay(2500); vm.clearToast() }
+    }
+
+    /**
+     * 处理返回按钮
+     * 
+     * 当 tabStepBackEnabled 为 false（关闭状态）时：
+     * 1. 如果设置菜单打开，先关闭菜单
+     * 2. 如果不在文件标签页，先切换到文件标签页
+     * 3. 如果在文件标签页且在子目录，先返回上一级目录
+     * 4. 如果在文件标签页且在根目录，返回上一页
+     * 
+     * 当 tabStepBackEnabled 为 true（开启状态）时，标签页逐级返回逻辑：
+     * 标签页顺序：0=文件, 1=提交, 2=分支, 3=操作, 4=发行版, 5=PR, 6=Issues
+     * 1. 如果设置菜单打开，先关闭菜单
+     * 2. 如果当前标签页索引 > 0，返回上一个标签页（索引减1）
+     * 3. 如果在文件标签页（索引=0）且在子目录，先返回上一级目录
+     * 4. 如果在文件标签页且在根目录，返回上一页
+     */
+    val handleBackPress by rememberUpdatedState(newValue = {
+        when {
+            showSettingsMenu -> {
+                showSettingsMenu = false
+            }
+            tabStepBackEnabled -> {
+                when {
+                    state.tab > 0 -> {
+                        vm.setTab(state.tab - 1)
+                    }
+                    state.currentPath.isNotEmpty() -> {
+                        vm.navigateUp()
+                    }
+                    else -> {
+                        onBack()
+                    }
+                }
+            }
+            else -> {
+                when {
+                    state.tab != 0 -> {
+                        vm.setTab(0)
+                    }
+                    state.currentPath.isNotEmpty() -> {
+                        vm.navigateUp()
+                    }
+                    else -> {
+                        onBack()
+                    }
+                }
+            }
+        }
+    })
+
+    BackHandler(enabled = true) {
+        handleBackPress()
     }
 
     Scaffold(
@@ -76,7 +185,7 @@ fun RepoDetailScreen(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = c.textSecondary) }
+                    IconButton(onClick = handleBackPress) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = c.textSecondary) }
                 },
                 actions = {
                     IconButton(onClick = vm::toggleStar) {
@@ -85,7 +194,137 @@ fun RepoDetailScreen(
                             null, tint = if (state.isStarred) Yellow else c.textSecondary,
                         )
                     }
-                    IconButton(onClick = { vm.loadAll(forceRefresh = true) }) { Icon(Icons.Default.Refresh, null, tint = c.textSecondary) }
+                    IconButton(onClick = { vm.loadAll(forceRefresh = true) }) {
+                        Icon(Icons.Default.Refresh, null, tint = c.textSecondary)
+                    }
+                    Box {
+                        IconButton(onClick = { showSettingsMenu = true }) {
+                            Icon(Icons.Default.Settings, null, tint = c.textSecondary)
+                        }
+                        DropdownMenu(
+                            expanded = showSettingsMenu,
+                            onDismissRequest = { showSettingsMenu = false },
+                            modifier = Modifier.background(c.bgCard),
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("重命名", fontSize = 14.sp, color = c.textPrimary) },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.DriveFileRenameOutline,
+                                        null,
+                                        tint = c.textSecondary,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                },
+                                onClick = {
+                                    showSettingsMenu = false
+                                    showRenameDialog = true
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("编辑信息", fontSize = 14.sp, color = c.textPrimary) },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Edit,
+                                        null,
+                                        tint = c.textSecondary,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                },
+                                onClick = {
+                                    showSettingsMenu = false
+                                    showEditDialog = true
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("分享", fontSize = 14.sp, color = c.textPrimary) },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Share,
+                                        null,
+                                        tint = c.textSecondary,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                },
+                                onClick = {
+                                    showSettingsMenu = false
+                                    state.repo?.let { repo ->
+                                        val intent = Intent(Intent.ACTION_SEND).apply {
+                                            type = "text/plain"
+                                            putExtra(Intent.EXTRA_SUBJECT, repo.fullName)
+                                            putExtra(Intent.EXTRA_TEXT, repo.htmlUrl)
+                                        }
+                                        context.startActivity(
+                                            Intent.createChooser(intent, "分享仓库"),
+                                        )
+                                    }
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        if (state.repo?.private == true) "设为公开" else "设为私有",
+                                        fontSize = 14.sp,
+                                        color = c.textPrimary,
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Lock,
+                                        null,
+                                        tint = c.textSecondary,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                },
+                                onClick = {
+                                    showSettingsMenu = false
+                                    showVisibilityDialog = true
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("转移", fontSize = 14.sp, color = c.textPrimary) },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.AccountCircle,
+                                        null,
+                                        tint = c.textSecondary,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                },
+                                onClick = {
+                                    showSettingsMenu = false
+                                    showTransferDialog = true
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("订阅通知", fontSize = 14.sp, color = c.textPrimary) },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Notifications, null,
+                                        tint = c.textSecondary, modifier = Modifier.size(16.dp))
+                                },
+                                onClick = {
+                                    showSettingsMenu = false
+                                    vm.loadSubscription()
+                                    showWatchSheet = true
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("删除", fontSize = 14.sp, color = RedColor) },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        null,
+                                        tint = RedColor,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                },
+                                onClick = {
+                                    showSettingsMenu = false
+                                    showDeleteDialog = true
+                                },
+                            )
+                        }
+                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = c.bgDeep),
             )
@@ -113,6 +352,13 @@ fun RepoDetailScreen(
                 if (!repo.description.isNullOrBlank()) {
                     Text(repo.description, fontSize = 13.sp, color = c.textSecondary, lineHeight = 20.sp)
                     Spacer(Modifier.height(10.dp))
+                }
+                if (!repo.homepage.isNullOrBlank()) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Icon(Icons.Default.Link, null, tint = BlueColor, modifier = Modifier.size(14.dp))
+                        Text(repo.homepage, fontSize = 12.sp, color = BlueColor)
+                    }
+                    Spacer(Modifier.height(8.dp))
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
                     StatItem(Icons.Default.Star, "${repo.stars}", Yellow)
@@ -165,14 +411,64 @@ fun RepoDetailScreen(
                     onFileClick = { path -> onFileClick(owner, repoName, path, state.currentBranch) },
                     onNavigateUp = vm::navigateUp,
                     onRefresh = { vm.loadContents(state.currentPath, forceRefresh = true) },
+                    onShare = {
+                        val url = "https://github.com/$owner/$repoName/blob/${state.currentBranch}/${state.currentPath}"
+                        val intent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, url)
+                        }
+                        context.startActivity(Intent.createChooser(intent, "分享"))
+                    },
+                    onAddFile = {
+                        newFileName = ""
+                        newFileContent = ""
+                        showCreateFileDialog = true
+                    },
+                    onHistory = {
+                        vm.setTab(1)
+                    },
+                    onFileRename = { content ->
+                        selectedFileForMenu = content
+                        renameFileNewName = content.name
+                        showRenameFileDialog = true
+                    },
+                    onFileDelete = { content ->
+                        selectedFileForMenu = content
+                        showDeleteFileDialog = true
+                    },
+                    onFileShare = { content ->
+                        val url = "https://github.com/$owner/$repoName/blob/${state.currentBranch}/${content.path}"
+                        val intent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, url)
+                        }
+                        context.startActivity(Intent.createChooser(intent, "分享"))
+                    },
+                    onFileHistory = { content ->
+                        val url = "https://github.com/$owner/$repoName/commits/${state.currentBranch}/${content.path}"
+                        val intent = Intent(
+                            Intent.ACTION_VIEW,
+                            Uri.parse(url)
+                        )
+                        context.startActivity(intent)
+                    },
                 )
-                1 -> CommitsTab(state, c, onCommitClick = { vm.loadCommitDetail(it.sha) })
+                1 -> CommitsTab(state, c, onCommitClick = { vm.loadCommitDetail(it.sha) },
+                    onRefresh = { vm.loadCommits(forceRefresh = true) })
                 2 -> BranchesTab(state, c, onSwitch = vm::switchBranch,
                     onNewBranch = { showNewBranchDialog = true },
                     onDelete = vm::deleteBranch, onRename = vm::renameBranch,
-                    onSetDefault = vm::setDefaultBranch)
-                3 -> PRTab(state.prs, c)
-                4 -> IssuesTab(state.issues, c)
+                    onSetDefault = vm::setDefaultBranch,
+                    onRefresh = vm::refreshBranches)
+                3 -> ActionsTab(state, c, vm, owner, repoName,
+                    onRefresh = vm::refreshActions)
+                4 -> ReleasesTab(state, vm = vm, c = c,
+                    onRefresh = vm::refreshReleases)
+                5 -> PRTab(state, c,
+                    onRefresh = vm::refreshPRs)
+                6 -> IssuesTab(state, c, vm,
+                    onRefresh = vm::refreshIssues,
+                    onIssueClick = onIssueClick)
             }
         }
     }
@@ -190,6 +486,198 @@ fun RepoDetailScreen(
             onDismiss = { showNewBranchDialog = false },
         )
     }
+    val repoForDialogs = state.repo
+    if (showRenameDialog && repoForDialogs != null) {
+        RepoRenameDialog(
+            currentName = repoForDialogs.name,
+            owner = repoForDialogs.owner.login,
+            c = c,
+            onConfirm = { newName ->
+                vm.renameRepo(newName) { onBack() }
+                showRenameDialog = false
+            },
+            onDismiss = { showRenameDialog = false },
+        )
+    }
+    if (showEditDialog && repoForDialogs != null) {
+        RepoEditDialog(
+            repo = repoForDialogs,
+            c = c,
+            onConfirm = { desc, site, topics ->
+                vm.editRepo(desc, site, topics)
+                showEditDialog = false
+            },
+            onDismiss = { showEditDialog = false },
+        )
+    }
+    if (showDeleteDialog && repoForDialogs != null) {
+        RepoDeleteDialog(
+            repoName = repoForDialogs.name,
+            owner = repoForDialogs.owner.login,
+            c = c,
+            onConfirm = {
+                vm.deleteRepo { onBack() }
+                showDeleteDialog = false
+            },
+            onDismiss = { showDeleteDialog = false },
+        )
+    }
+    if (showVisibilityDialog && repoForDialogs != null) {
+        RepoVisibilityDialog(
+            repo = repoForDialogs,
+            c = c,
+            onConfirm = { makePrivate ->
+                vm.updateVisibility(makePrivate)
+                showVisibilityDialog = false
+            },
+            onDismiss = { showVisibilityDialog = false },
+        )
+    }
+    if (showTransferDialog) {
+        RepoTransferDialog(
+            owner = vm.owner,
+            repoName = vm.repoName,
+            userLogin = state.userLogin,
+            userAvatar = state.userAvatar,
+            orgs = state.userOrgs,
+            c = c,
+            onConfirm = { target, newName ->
+                vm.transferRepo(target, newName) { onBack() }
+                showTransferDialog = false
+            },
+            onDismiss = { showTransferDialog = false },
+        )
+    }
+
+    if (showCreateFileDialog) {
+        CreateFileDialog(
+            currentPath = state.currentPath,
+            c = c,
+            onConfirm = { fileName, content ->
+                showCreateFileDialog = false
+                newFileName = fileName
+                newFileContent = content
+                commitMessage = "Create $fileName"
+                showCommitMessageDialog = true
+            },
+            onDismiss = { showCreateFileDialog = false },
+        )
+    }
+
+    if (showCommitMessageDialog) {
+        CommitMessageDialog(
+            defaultMessage = commitMessage,
+            c = c,
+            onConfirm = { msg ->
+                showCommitMessageDialog = false
+                val fullPath = if (state.currentPath.isNotEmpty()) {
+                    "${state.currentPath}/$newFileName"
+                } else {
+                    newFileName
+                }
+                vm.createOrUpdateFile(
+                    path = fullPath,
+                    message = msg,
+                    content = newFileContent,
+                )
+            },
+            onDismiss = { showCommitMessageDialog = false },
+        )
+    }
+
+    if (showRenameFileDialog && selectedFileForMenu != null) {
+        var newName by remember { mutableStateOf(renameFileNewName) }
+        AlertDialog(
+            onDismissRequest = { showRenameFileDialog = false },
+            containerColor = c.bgCard,
+            title = { Text("重命名文件/文件夹", color = c.textPrimary, fontWeight = FontWeight.SemiBold) },
+            text = {
+                OutlinedTextField(
+                    value = newName,
+                    onValueChange = { newName = it },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("新名称") },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Coral,
+                        unfocusedBorderColor = c.border,
+                        focusedTextColor = c.textPrimary,
+                        unfocusedTextColor = c.textPrimary,
+                        focusedContainerColor = c.bgItem,
+                        unfocusedContainerColor = c.bgItem,
+                        focusedLabelColor = Coral,
+                        unfocusedLabelColor = c.textTertiary,
+                    ),
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (newName.isNotBlank() && newName != selectedFileForMenu!!.name) {
+                            showRenameFileDialog = false
+                            commitMessage = "Rename ${selectedFileForMenu!!.name} to $newName"
+                            val oldPath = selectedFileForMenu!!.path
+                            val newPath = oldPath.replaceAfterLast("/", newName)
+                            
+                            vm.renameFile(
+                                oldPath = oldPath,
+                                newPath = newPath,
+                                message = commitMessage,
+                            )
+                        }
+                    },
+                    enabled = newName.isNotBlank() && newName != selectedFileForMenu!!.name,
+                    colors = ButtonDefaults.buttonColors(containerColor = Coral),
+                ) {
+                    Text("重命名")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRenameFileDialog = false }) {
+                    Text("取消", color = c.textSecondary)
+                }
+            },
+        )
+    }
+
+    if (showDeleteFileDialog && selectedFileForMenu != null) {
+        AlertDialog(
+            onDismissRequest = { showDeleteFileDialog = false },
+            containerColor = c.bgCard,
+            icon = {
+                Icon(Icons.Default.Delete, null, tint = RedColor, modifier = Modifier.size(28.dp))
+            },
+            title = { Text("确认删除", color = c.textPrimary, fontWeight = FontWeight.SemiBold) },
+            text = {
+                Text("确定要删除 \"${selectedFileForMenu!!.name}\" 吗？此操作无法撤销。", fontSize = 13.sp, color = c.textSecondary)
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showDeleteFileDialog = false
+                        commitMessage = "Delete ${selectedFileForMenu!!.name}"
+                        vm.deleteFile(
+                            path = selectedFileForMenu!!.path,
+                            message = commitMessage,
+                            sha = selectedFileForMenu!!.sha,
+                        )
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = RedColor),
+                ) {
+                    Text("删除")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteFileDialog = false }) {
+                    Text("取消", color = c.textSecondary)
+                }
+            },
+        )
+    }
+    // 订阅设置 Sheet
+    if (showWatchSheet) {
+        WatchSheet(state = state, vm = vm, onDismiss = { showWatchSheet = false })
+    }
     // Commit 详情 Modal
     state.selectedCommit?.let { commit ->
         CommitDetailSheet(commit = commit, c = c, vm = vm, onDismiss = vm::clearCommitDetail)
@@ -206,6 +694,16 @@ private fun StatItem(icon: ImageVector, text: String, tint: Color) {
 
 // ─── Tabs ────────────────────────────────────────────────────────
 
+/**
+ * 文件标签页组件
+ * 
+ * @param state 仓库详情状态
+ * @param c 颜色主题
+ * @param onDirClick 目录点击回调
+ * @param onFileClick 文件点击回调
+ * @param onNavigateUp 返回上一级目录回调
+ * @param onRefresh 刷新回调
+ */
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
 fun FilesTab(
@@ -215,41 +713,80 @@ fun FilesTab(
     onFileClick: (String) -> Unit,
     onNavigateUp: () -> Unit,
     onRefresh: () -> Unit = {},
+    onShare: () -> Unit = {},
+    onAddFile: () -> Unit = {},
+    onHistory: () -> Unit = {},
+    onFileRename: (GHContent) -> Unit = {},
+    onFileDelete: (GHContent) -> Unit = {},
+    onFileShare: (GHContent) -> Unit = {},
+    onFileHistory: (GHContent) -> Unit = {},
 ) {
-    var isRefreshing by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-
-    androidx.compose.material3.pulltorefresh.PullToRefreshBox(
-        isRefreshing = isRefreshing,
-        onRefresh = {
-            isRefreshing = true
-            onRefresh()
-            scope.launch {
-                kotlinx.coroutines.delay(800)
-                isRefreshing = false
-            }
-        },
+    PullToRefreshBox(
+        isRefreshing = state.filesRefreshing,
+        onRefresh = onRefresh,
     ) {
         LazyColumn(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(1.dp),
         ) {
-            if (state.currentPath.isNotEmpty()) {
-                item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth()
-                            .background(c.bgCard, RoundedCornerShape(8.dp))
-                            .clickable(onClick = onNavigateUp)
-                            .padding(horizontal = 12.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth()
+                        .background(c.bgCard, RoundedCornerShape(8.dp))
+                        .let { if (state.currentPath.isNotEmpty()) it.clickable(onClick = onNavigateUp) else it }
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    if (state.currentPath.isNotEmpty()) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, null,
                             tint = c.textTertiary, modifier = Modifier.size(17.dp))
                         Text("..", fontSize = 13.sp, color = c.textTertiary)
-                        Spacer(Modifier.weight(1f))
+                    }
+                    Spacer(Modifier.weight(1f))
+                    if (state.currentPath.isNotEmpty()) {
                         Text(state.currentPath, fontSize = 11.sp,
                             color = c.textTertiary, fontFamily = FontFamily.Monospace)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        IconButton(
+                            onClick = onShare,
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Share,
+                                contentDescription = "分享",
+                                tint = c.textSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        IconButton(
+                            onClick = onAddFile,
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Add,
+                                contentDescription = "添加文件",
+                                tint = c.textSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        IconButton(
+                            onClick = onHistory,
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.History,
+                                contentDescription = "历史记录",
+                                tint = c.textSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -262,6 +799,8 @@ fun FilesTab(
             } else {
                 items(state.contents, key = { it.path }) { content ->
                     val isDir = content.type == "dir"
+                    var showMenu by remember { mutableStateOf(false) }
+                    
                     Row(
                         modifier = Modifier.fillMaxWidth()
                             .background(c.bgCard, RoundedCornerShape(8.dp))
@@ -279,673 +818,200 @@ fun FilesTab(
                         Text(content.name, fontSize = 13.sp, color = c.textPrimary,
                             modifier = Modifier.weight(1f))
                         if (!isDir) Text(formatSize(content.size), fontSize = 11.sp, color = c.textTertiary)
+                        
+                        Box {
+                            IconButton(
+                                onClick = { showMenu = true },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.MoreVert,
+                                    contentDescription = "更多",
+                                    tint = c.textTertiary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = showMenu,
+                                onDismissRequest = { showMenu = false },
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("重命名", fontSize = 13.sp, color = c.textPrimary) },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Default.DriveFileRenameOutline,
+                                            null,
+                                            tint = c.textSecondary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    },
+                                    onClick = {
+                                        showMenu = false
+                                        onFileRename(content)
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("删除", fontSize = 13.sp, color = RedColor) },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Default.Delete,
+                                            null,
+                                            tint = RedColor,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    },
+                                    onClick = {
+                                        showMenu = false
+                                        onFileDelete(content)
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("分享", fontSize = 13.sp, color = c.textPrimary) },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Default.Share,
+                                            null,
+                                            tint = c.textSecondary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    },
+                                    onClick = {
+                                        showMenu = false
+                                        onFileShare(content)
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("历史记录", fontSize = 13.sp, color = c.textPrimary) },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Default.History,
+                                            null,
+                                            tint = c.textSecondary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    },
+                                    onClick = {
+                                        showMenu = false
+                                        onFileHistory(content)
+                                    },
+                                )
+                            }
+                        }
+                        
                         if (isDir) Icon(Icons.AutoMirrored.Filled.ArrowForward, null,
                             tint = c.textTertiary, modifier = Modifier.size(14.dp))
                     }
                 }
             }
-        }
-    }
-}
-
-@Composable
-fun CommitsTab(state: RepoDetailState, c: GmColors, onCommitClick: (GHCommit) -> Unit) {
-    if (state.commits.isEmpty()) { EmptyBox("暂无提交记录"); return }
-    LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        items(state.commits, key = { it.sha }) { commit ->
-            Column(
-                modifier = Modifier.fillMaxWidth().background(c.bgCard, RoundedCornerShape(12.dp))
-                    .clickable { onCommitClick(commit) }.padding(12.dp),
-            ) {
-                Text(commit.commit.message.lines().first(), fontSize = 13.sp,
-                    color = c.textPrimary, fontWeight = FontWeight.Medium, maxLines = 2)
-                Spacer(Modifier.height(6.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (commit.author != null) AvatarImage(commit.author.avatarUrl, 20)
-                    Text(commit.commit.author.name, fontSize = 11.sp, color = c.textSecondary)
-                    Spacer(Modifier.weight(1f))
-                    Text(commit.shortSha, fontSize = 10.sp, color = Coral,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.background(CoralDim, RoundedCornerShape(4.dp))
-                            .padding(horizontal = 5.dp, vertical = 1.dp))
-                    Text(formatDate(commit.commit.author.date), fontSize = 11.sp, color = c.textTertiary)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun BranchesTab(
-    state: RepoDetailState, c: GmColors,
-    onSwitch: (String) -> Unit, onNewBranch: () -> Unit,
-    onDelete: (String) -> Unit, onRename: (String, String) -> Unit,
-    onSetDefault: (String) -> Unit,
-) {
-    var showRenameDialog by remember { mutableStateOf<GHBranch?>(null) }
-    var showDeleteDialog by remember { mutableStateOf<GHBranch?>(null) }
-    val defaultBranch = state.repo?.defaultBranch ?: ""
-
-    LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        item {
-            Button(onClick = onNewBranch, modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = CoralDim, contentColor = Coral),
-                shape = RoundedCornerShape(12.dp)) {
-                Icon(Icons.Default.Add, null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("新建分支", fontSize = 13.sp)
-            }
-        }
-        items(state.branches, key = { it.name }) { branch ->
-            val isCurrent = branch.name == state.currentBranch
-            val isDefault = branch.name == defaultBranch
-            var showMenu by remember { mutableStateOf(false) }
-
-            Row(
-                modifier = Modifier.fillMaxWidth().background(c.bgCard, RoundedCornerShape(12.dp))
-                    .padding(horizontal = 14.dp, vertical = 11.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(Icons.Default.AccountTree, null,
-                    tint = if (isCurrent) Coral else c.textTertiary, modifier = Modifier.size(15.dp))
-                Spacer(Modifier.width(8.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(branch.name, fontSize = 13.sp,
-                        color = if (isCurrent) Coral else c.textPrimary,
-                        fontFamily = FontFamily.Monospace)
-                    if (isDefault) Text("默认分支", fontSize = 10.sp, color = Green, modifier = Modifier.padding(top = 1.dp))
-                }
-                if (isCurrent) {
-                    GmBadge("当前", CoralDim, Coral)
-                    Spacer(Modifier.width(4.dp))
-                }
-                // 菜单
-                Box {
-                    IconButton(onClick = { showMenu = true }, modifier = Modifier.size(28.dp)) {
-                        Icon(Icons.Default.MoreVert, null, tint = c.textTertiary, modifier = Modifier.size(16.dp))
-                    }
-                    DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false },
-                        modifier = Modifier.background(c.bgCard)) {
-                        if (!isCurrent) {
-                            DropdownMenuItem(
-                                text = { Text("切换到此分支", fontSize = 13.sp, color = c.textPrimary) },
-                                leadingIcon = { Icon(Icons.Default.AccountTree, null, tint = BlueColor, modifier = Modifier.size(15.dp)) },
-                                onClick = { onSwitch(branch.name); showMenu = false },
-                            )
-                        }
-                        if (!isDefault) {
-                            DropdownMenuItem(
-                                text = { Text("设为默认分支", fontSize = 13.sp, color = c.textPrimary) },
-                                leadingIcon = { Icon(Icons.Default.Star, null, tint = Yellow, modifier = Modifier.size(15.dp)) },
-                                onClick = { onSetDefault(branch.name); showMenu = false },
-                            )
-                        }
-                        DropdownMenuItem(
-                            text = { Text("重命名", fontSize = 13.sp, color = c.textPrimary) },
-                            leadingIcon = { Icon(Icons.Default.DriveFileRenameOutline, null, tint = c.textSecondary, modifier = Modifier.size(15.dp)) },
-                            onClick = { showRenameDialog = branch; showMenu = false },
-                        )
-                        if (!isDefault && !isCurrent) {
-                            DropdownMenuItem(
-                                text = { Text("删除分支", fontSize = 13.sp, color = RedColor) },
-                                leadingIcon = { Icon(Icons.Default.Delete, null, tint = RedColor, modifier = Modifier.size(15.dp)) },
-                                onClick = { showDeleteDialog = branch; showMenu = false },
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    showRenameDialog?.let { branch ->
-        RenameBranchDialog(branch.name, c = c,
-            onConfirm = { newName -> onRename(branch.name, newName); showRenameDialog = null },
-            onDismiss = { showRenameDialog = null })
-    }
-    showDeleteDialog?.let { branch ->
-        AlertDialog(
-            onDismissRequest = { showDeleteDialog = null },
-            containerColor = c.bgCard,
-            title = { Text("删除分支", color = c.textPrimary) },
-            text = { Text("确认删除分支 \"${branch.name}\"？此操作不可撤销。", color = c.textSecondary) },
-            confirmButton = {
-                Button(onClick = { onDelete(branch.name); showDeleteDialog = null },
-                    colors = ButtonDefaults.buttonColors(containerColor = RedColor)) { Text("删除") }
-            },
-            dismissButton = { TextButton(onClick = { showDeleteDialog = null }) { Text("取消", color = c.textSecondary) } },
-        )
-    }
-}
-
-@Composable
-fun PRTab(prs: List<GHPullRequest>, c: GmColors) {
-    if (prs.isEmpty()) { EmptyBox("暂无 Pull Request"); return }
-    LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        items(prs, key = { it.number }) { pr ->
-            Column(Modifier.fillMaxWidth().background(c.bgCard, RoundedCornerShape(12.dp)).padding(12.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    GmBadge("#${pr.number}", GreenDim, Green)
-                    Text(pr.title, fontSize = 13.sp, color = c.textPrimary, modifier = Modifier.weight(1f))
-                }
-                Spacer(Modifier.height(6.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(pr.head.ref, fontSize = 11.sp, color = BlueColor, fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.background(BlueDim, RoundedCornerShape(4.dp)).padding(horizontal = 5.dp))
-                    Text("→", fontSize = 11.sp, color = c.textTertiary)
-                    Text(pr.base.ref, fontSize = 11.sp, color = c.textSecondary, fontFamily = FontFamily.Monospace)
-                    Spacer(Modifier.weight(1f))
-                    Text(pr.user.login, fontSize = 11.sp, color = c.textTertiary)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun IssuesTab(issues: List<GHIssue>, c: GmColors) {
-    val filtered = issues.filter { !it.isPR }
-    if (filtered.isEmpty()) { EmptyBox("暂无 Issues"); return }
-    LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        items(filtered, key = { it.number }) { issue ->
-            Row(
-                modifier = Modifier.fillMaxWidth().background(c.bgCard, RoundedCornerShape(12.dp)).padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Icon(Icons.Default.Circle, null,
-                    tint = if (issue.state == "open") Green else RedColor, modifier = Modifier.size(10.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(issue.title, fontSize = 13.sp, color = c.textPrimary)
-                    Text("#${issue.number} · ${issue.user.login}", fontSize = 11.sp,
-                        color = c.textTertiary, modifier = Modifier.padding(top = 2.dp))
-                }
-            }
-        }
-    }
-}
-
-// ─── Commit Detail Modal ───────────────────────────────────────────
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun CommitDetailSheet(
-    commit: GHCommitFull,
-    c: GmColors,
-    vm: RepoDetailViewModel,
-    onDismiss: () -> Unit,
-) {
-    val context = LocalContext.current
-    val state by vm.state.collectAsState()
-    var showResetConfirm  by remember { mutableStateOf(false) }
-    var showRevertConfirm by remember { mutableStateOf(false) }
-
-    // ── Diff 查看器（二级 Sheet）──────────────────────────────────────────
-    state.selectedFilePatch?.let { (filename, patch) ->
-        FileDiffSheet(filename = filename, patch = patch, c = c, onDismiss = vm::closeFilePatch)
-    }
-
-    // ── 回滚确认 ──────────────────────────────────────────────────────────
-    if (showResetConfirm) {
-        ResetConfirmDialog(
-            shortSha = commit.shortSha,
-            branch   = state.currentBranch,
-            c        = c,
-            onConfirm = {
-                vm.resetToCommit(commit.sha)
-                showResetConfirm = false
-            },
-            onDismiss = { showResetConfirm = false },
-        )
-    }
-
-    // ── 撤销确认 ──────────────────────────────────────────────────────────
-    if (showRevertConfirm) {
-        RevertConfirmDialog(
-            commit    = commit,
-            branch    = state.currentBranch,
-            c         = c,
-            onConfirm = { msg ->
-                vm.revertCommit(commit.sha, msg)
-                showRevertConfirm = false
-            },
-            onDismiss = { showRevertConfirm = false },
-        )
-    }
-
-    // ── 操作结果提示 ───────────────────────────────────────────────────────
-    state.gitOpResult?.let { result ->
-        LaunchedEffect(result) {
-            kotlinx.coroutines.delay(3000)
-            vm.clearGitOpResult()
-        }
-        GitOpResultSnackbar(result = result, c = c)
-    }
-
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor   = c.bgCard,
-        dragHandle       = { BottomSheetDefaults.DragHandle(color = c.border) },
-        sheetState       = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-    ) {
-        // 操作进行中遮罩
-        if (state.gitOpInProgress) {
-            Box(
-                Modifier.fillMaxWidth().padding(24.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    CircularProgressIndicator(color = Coral, modifier = Modifier.size(32.dp))
-                    Text("正在执行操作…", fontSize = 13.sp, color = c.textSecondary)
-                }
-            }
-            return@ModalBottomSheet
-        }
-
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp)
-                .padding(bottom = 32.dp),
-        ) {
-            // ── Header ──────────────────────────────────────────────────
-            Row(verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    commit.shortSha,
-                    fontSize = 12.sp, color = Coral, fontFamily = FontFamily.Monospace,
-                    modifier = Modifier
-                        .background(CoralDim, RoundedCornerShape(4.dp))
-                        .padding(horizontal = 6.dp, vertical = 2.dp),
-                )
-                Spacer(Modifier.weight(1f))
-                if (commit.stats != null) {
-                    Text("+${commit.stats.additions}", fontSize = 12.sp, color = Green)
-                    Text("-${commit.stats.deletions}", fontSize = 12.sp, color = RedColor)
-                }
-            }
-            Spacer(Modifier.height(10.dp))
-            Text(commit.commit.message, fontSize = 14.sp, color = c.textPrimary,
-                lineHeight = 22.sp, fontWeight = FontWeight.Medium)
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically) {
-                if (commit.author != null) AvatarImage(commit.author.avatarUrl, 20)
-                Text(commit.commit.author.name, fontSize = 12.sp, color = c.textSecondary)
-                Text("·", color = c.textTertiary)
-                Text(formatDate(commit.commit.author.date), fontSize = 12.sp, color = c.textTertiary)
-            }
-            Spacer(Modifier.height(14.dp))
-            GmDivider()
-            Spacer(Modifier.height(12.dp))
-
-            // ── 变更文件列表（可点击查看 diff）──────────────────────────
-            commit.files?.let { files ->
-                Row(verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("变更文件 (${files.size})", fontSize = 12.sp,
-                        color = c.textSecondary, fontWeight = FontWeight.Medium)
-                    Text("· 点击查看 diff", fontSize = 11.sp, color = c.textTertiary)
-                }
-                Spacer(Modifier.height(8.dp))
-                files.forEach { file ->
-                    val (statusColor, statusLabel) = when (file.status) {
-                        "added"    -> Green     to "A"
-                        "removed"  -> RedColor  to "D"
-                        "modified" -> Yellow    to "M"
-                        "renamed"  -> BlueColor to "R"
-                        else       -> c.textTertiary to "?"
-                    }
-                    val hasPatch = !file.patch.isNullOrBlank()
-                    Row(
+            // 只在根目录显示 README
+            if (state.currentPath.isEmpty()) {
+                item {
+                    Spacer(Modifier.height(16.dp))
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(
-                                if (hasPatch) c.bgItem else Color.Transparent,
-                                RoundedCornerShape(8.dp),
-                            )
-                            .then(
-                                if (hasPatch) Modifier.clickable {
-                                    vm.openFilePatch(file.filename, file.patch!!)
-                                } else Modifier
-                            )
-                            .padding(horizontal = 8.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            .background(c.bgCard, RoundedCornerShape(8.dp))
+                            .padding(16.dp)
                     ) {
-                        Text(
-                            statusLabel, fontSize = 11.sp, color = statusColor,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier
-                                .background(statusColor.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
-                                .padding(horizontal = 5.dp, vertical = 1.dp),
-                        )
-                        Text(file.filename, fontSize = 12.sp, color = c.textPrimary,
-                            fontFamily = FontFamily.Monospace,
-                            modifier = Modifier.weight(1f), maxLines = 1)
-                        if (file.additions > 0 || file.deletions > 0) {
-                            Text("+${file.additions}/-${file.deletions}",
-                                fontSize = 11.sp, color = c.textTertiary)
-                        }
-                        if (hasPatch) {
-                            Icon(Icons.Default.ChevronRight, null,
-                                tint = c.textTertiary, modifier = Modifier.size(14.dp))
+                        Text("README", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = c.textPrimary)
+                        Spacer(Modifier.height(8.dp))
+                        GmDivider()
+                        Spacer(Modifier.height(8.dp))
+                        if (state.readmeLoading) {
+                            Box(Modifier.fillMaxWidth().height(100.dp), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(color = Coral, modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                            }
+                        } else if (state.readmeContent != null) {
+                            MarkdownText(
+                                markdown = state.readmeContent!!,
+                                style = androidx.compose.ui.text.TextStyle(color = c.textPrimary),
+                            )
+                        } else {
+                            Text("暂无 README 文件", fontSize = 13.sp, color = c.textTertiary)
                         }
                     }
                 }
             }
-
-            Spacer(Modifier.height(16.dp))
-            GmDivider()
-            Spacer(Modifier.height(12.dp))
-
-            // ── 操作区 ─────────────────────────────────────────────────
-            Text("操作", fontSize = 12.sp, color = c.textSecondary, fontWeight = FontWeight.Medium)
-            Spacer(Modifier.height(10.dp))
-
-            // 撤销（Revert）：创建新 commit，保留历史 ─────────────────────
-            Button(
-                onClick = { showRevertConfirm = true },
-                modifier = Modifier.fillMaxWidth().height(46.dp),
-                shape  = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = BlueColor),
-            ) {
-                Icon(Icons.Default.SwapHoriz, null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Column {
-                    Text("撤销此提交", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                }
-            }
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "· 创建新 commit，内容回退到此提交之前，不重写历史",
-                fontSize = 11.sp, color = c.textTertiary,
-                modifier = Modifier.padding(horizontal = 4.dp),
-            )
-
-            Spacer(Modifier.height(12.dp))
-
-            // 回滚（Reset）：强制移动分支指针 ────────────────────────────
-            OutlinedButton(
-                onClick = { showResetConfirm = true },
-                modifier = Modifier.fillMaxWidth().height(46.dp),
-                shape  = RoundedCornerShape(12.dp),
-                border = ButtonDefaults.outlinedButtonBorder.copy(
-                    brush = androidx.compose.ui.graphics.SolidColor(RedColor.copy(alpha = 0.7f))),
-            ) {
-                Icon(Icons.Default.RestartAlt, null, tint = RedColor, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("回滚到此提交", fontSize = 13.sp, color = RedColor, fontWeight = FontWeight.SemiBold)
-            }
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "· 强制将分支 HEAD 指向此 SHA，之后的提交将消失（危险）",
-                fontSize = 11.sp, color = c.textTertiary,
-                modifier = Modifier.padding(horizontal = 4.dp),
-            )
-
-            Spacer(Modifier.height(16.dp))
-
-            // 在 GitHub 查看 ──────────────────────────────────────────────
-            OutlinedButton(
-                onClick = {
-                    context.startActivity(android.content.Intent(
-                        android.content.Intent.ACTION_VIEW,
-                        android.net.Uri.parse(commit.htmlUrl)))
-                },
-                modifier = Modifier.fillMaxWidth(),
-                shape  = RoundedCornerShape(12.dp),
-                border = ButtonDefaults.outlinedButtonBorder.copy(
-                    brush = androidx.compose.ui.graphics.SolidColor(c.border)),
-            ) {
-                Icon(Icons.Default.OpenInBrowser, null,
-                    tint = c.textSecondary, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("在 GitHub 查看", fontSize = 14.sp, color = c.textSecondary)
-            }
         }
+
     }
 }
 
-// ─── ResetConfirmDialog（回滚：重写历史，危险操作）───────────────────────────
-
-@Composable
-private fun ResetConfirmDialog(
-    shortSha: String, branch: String, c: GmColors,
-    onConfirm: () -> Unit, onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor   = c.bgCard,
-        icon = {
-            Icon(Icons.Default.RestartAlt, null, tint = RedColor, modifier = Modifier.size(28.dp))
-        },
-        title = { Text("确认回滚", color = c.textPrimary, fontWeight = FontWeight.SemiBold) },
-        text  = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                // 目标提交
-                Row(
-                    modifier = Modifier.fillMaxWidth()
-                        .background(c.bgItem, RoundedCornerShape(8.dp)).padding(10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("目标", fontSize = 12.sp, color = c.textTertiary)
-                    Text(
-                        shortSha, fontSize = 13.sp, color = Coral,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.background(CoralDim, RoundedCornerShape(4.dp))
-                            .padding(horizontal = 6.dp, vertical = 2.dp),
-                    )
-                    Text("on  $branch", fontSize = 12.sp, color = c.textSecondary)
-                }
-                // 危险警告
-                Row(
-                    modifier = Modifier.fillMaxWidth()
-                        .background(RedDim, RoundedCornerShape(8.dp)).padding(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Icon(Icons.Default.Warning, null, tint = RedColor, modifier = Modifier.size(18.dp))
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("⚠ 危险操作", fontSize = 13.sp, color = RedColor, fontWeight = FontWeight.SemiBold)
-                        Text(
-                            "此操作将强制把分支指针指向目标提交，之后的所有提交记录将从分支上消失（相当于 git push -f）。如果分支有保护规则，操作可能被拒绝。",
-                            fontSize = 12.sp, color = RedColor.copy(alpha = 0.85f), lineHeight = 17.sp,
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = onConfirm,
-                colors  = ButtonDefaults.buttonColors(containerColor = RedColor),
-                shape   = RoundedCornerShape(10.dp),
-            ) { Text("确认回滚", fontWeight = FontWeight.SemiBold) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消", color = c.textSecondary) }
-        },
-    )
-}
-
-// ─── RevertConfirmDialog（撤销：创建新 commit，安全）────────────────────────
-
-@Composable
-private fun RevertConfirmDialog(
-    commit: GHCommitFull, branch: String, c: GmColors,
-    onConfirm: (message: String) -> Unit, onDismiss: () -> Unit,
-) {
-    val defaultMsg = "Revert \"${commit.commit.message.lines().first().take(50)}\""
-    var revertMsg by remember { mutableStateOf(defaultMsg) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor   = c.bgCard,
-        icon = {
-            Icon(Icons.Default.SwapHoriz, null, tint = BlueColor, modifier = Modifier.size(28.dp))
-        },
-        title = { Text("撤销此提交", color = c.textPrimary, fontWeight = FontWeight.SemiBold) },
-        text  = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                // 目标提交信息
-                Row(
-                    modifier = Modifier.fillMaxWidth()
-                        .background(c.bgItem, RoundedCornerShape(8.dp)).padding(10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        commit.shortSha, fontSize = 12.sp, color = Coral,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.background(CoralDim, RoundedCornerShape(4.dp))
-                            .padding(horizontal = 6.dp, vertical = 2.dp),
-                    )
-                    Text(
-                        commit.commit.message.lines().first(),
-                        fontSize = 12.sp, color = c.textPrimary,
-                        modifier = Modifier.weight(1f), maxLines = 1,
-                    )
-                }
-                // 安全说明
-                Row(
-                    modifier = Modifier.fillMaxWidth()
-                        .background(BlueColor.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
-                        .padding(10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Icon(Icons.Default.Info, null, tint = BlueColor, modifier = Modifier.size(16.dp))
-                    Text(
-                        "将创建一个新的 revert commit，把分支内容恢复到此提交之前的状态。不重写历史，可安全用于受保护分支。",
-                        fontSize = 12.sp, color = BlueColor.copy(alpha = 0.9f), lineHeight = 17.sp,
-                    )
-                }
-                // commit message 编辑
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Revert commit 信息", fontSize = 12.sp,
-                        color = c.textSecondary, fontWeight = FontWeight.Medium)
-                    OutlinedTextField(
-                        value         = revertMsg,
-                        onValueChange = { revertMsg = it },
-                        singleLine    = true,
-                        modifier      = Modifier.fillMaxWidth(),
-                        shape         = RoundedCornerShape(10.dp),
-                        colors        = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor      = BlueColor,
-                            unfocusedBorderColor    = c.border,
-                            focusedTextColor        = c.textPrimary,
-                            unfocusedTextColor      = c.textPrimary,
-                            focusedContainerColor   = c.bgItem,
-                            unfocusedContainerColor = c.bgItem,
-                        ),
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick  = { if (revertMsg.isNotBlank()) onConfirm(revertMsg.trim()) },
-                enabled  = revertMsg.isNotBlank(),
-                colors   = ButtonDefaults.buttonColors(containerColor = BlueColor),
-                shape    = RoundedCornerShape(10.dp),
-            ) { Text("确认撤销", fontWeight = FontWeight.SemiBold) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消", color = c.textSecondary) }
-        },
-    )
-}
-
-// ─── 操作结果浮动提示 ────────────────────────────────────────────────────────
-
-@Composable
-private fun GitOpResultSnackbar(result: GitOpResult, c: GmColors) {
-    val bg  = if (result.success) GreenDim  else RedDim
-    val fg  = if (result.success) Green     else RedColor
-    val ico = if (result.success) Icons.Default.CheckCircle else Icons.Default.Error
-    Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(bg, RoundedCornerShape(12.dp))
-                .padding(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(ico, null, tint = fg, modifier = Modifier.size(18.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    "${result.opName}${if (result.success) "成功" else "失败"}",
-                    fontSize = 13.sp, color = fg, fontWeight = FontWeight.SemiBold,
-                )
-                Text(result.detail, fontSize = 12.sp, color = fg.copy(alpha = 0.8f), lineHeight = 16.sp)
-            }
-        }
-    }
-}
-
-
-// ─── FileDiffSheet ──────────────────────────────────────────────────────────
-
+/**
+ * 提交记录标签页组件
+ * 
+ * @param state 仓库详情状态
+ * @param c 颜色主题
+ * @param onCommitClick 提交点击回调
+ * @param onRefresh 刷新回调
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FileDiffSheet(filename: String, patch: String, c: GmColors, onDismiss: () -> Unit) {
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = Color(0xFF0D1117),   // GitHub 暗色背景
-        dragHandle = { BottomSheetDefaults.DragHandle(color = Color(0xFF30363D)) },
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+fun PRTab(
+    state: RepoDetailState, 
+    c: GmColors,
+    onRefresh: () -> Unit = {},
+) {
+    val prs = state.prs
+    PullToRefreshBox(
+        isRefreshing = state.prsRefreshing,
+        onRefresh = onRefresh,
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp)
-                .padding(bottom = 32.dp),
-        ) {
-            // 文件名 header
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.padding(vertical = 10.dp),
-            ) {
-                Icon(Icons.Default.Description, null,
-                    tint = Color(0xFF8B949E), modifier = Modifier.size(16.dp))
-                Text(filename, fontSize = 13.sp, color = Color(0xFFE6EDF3),
-                    fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f), maxLines = 1)
-            }
-            HorizontalDivider(color = Color(0xFF30363D), thickness = 0.5.dp)
-            Spacer(Modifier.height(8.dp))
-
-            // Diff 内容（逐行着色）
-            val lines = patch.lines()
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-                    .horizontalScroll(rememberScrollState()),
-            ) {
-                lines.forEach { line ->
-                    val (bg, fg) = when {
-                        line.startsWith("+") && !line.startsWith("+++") ->
-                            Color(0xFF0D4A29) to Color(0xFF85E89D)       // 新增：绿色
-                        line.startsWith("-") && !line.startsWith("---") ->
-                            Color(0xFF430D18) to Color(0xFFFFA198)       // 删除：红色
-                        line.startsWith("@@") ->
-                            Color(0xFF1B3A5E) to Color(0xFF79C0FF)       // 行号标记：蓝色
-                        else -> Color.Transparent to Color(0xFF8B949E)  // 上下文：灰色
+        if (prs.isEmpty()) {
+            EmptyBox("暂无 Pull Request")
+        } else {
+            LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(prs, key = { it.number }) { pr ->
+                    Column(Modifier.fillMaxWidth().background(c.bgCard, RoundedCornerShape(12.dp)).padding(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            GmBadge("#${pr.number}", GreenDim, Green)
+                            Text(pr.title, fontSize = 13.sp, color = c.textPrimary, modifier = Modifier.weight(1f))
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(pr.head.ref, fontSize = 11.sp, color = BlueColor, fontFamily = FontFamily.Monospace,
+                                modifier = Modifier.background(BlueDim, RoundedCornerShape(4.dp)).padding(horizontal = 5.dp))
+                            Text("→", fontSize = 11.sp, color = c.textTertiary)
+                            Text(pr.base.ref, fontSize = 11.sp, color = c.textSecondary, fontFamily = FontFamily.Monospace)
+                            Spacer(Modifier.weight(1f))
+                            Text(pr.user.login, fontSize = 11.sp, color = c.textTertiary)
+                        }
                     }
-                    Text(
-                        text = line,
-                        fontSize = 11.sp, color = fg, fontFamily = FontFamily.Monospace,
-                        lineHeight = 16.sp,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(bg)
-                            .padding(horizontal = 4.dp, vertical = 1.dp),
-                    )
                 }
             }
         }
+
     }
 }
+
+/**
+ * Issues标签页组件
+ * 
+ * @param state 仓库详情状态
+ * @param c 颜色主题
+ * @param vm 仓库详情ViewModel
+ * @param onRefresh 刷新回调
+ */
+internal fun formatSize(bytes: Long): String = when {
+    bytes < 1024L        -> "${bytes}B"
+    bytes < 1024L * 1024 -> "${bytes / 1024}KB"
+    bytes < 1024L * 1024 * 1024 -> "${bytes / 1024 / 1024}MB"
+    else -> "${bytes / 1024 / 1024 / 1024}GB"
+}
+
+private val dateFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+
+internal fun repoFormatDate(iso: String): String = try {
+    val odt = OffsetDateTime.parse(iso)
+    odt.toLocalDateTime().format(dateFormatter)
+} catch (_: Exception) {
+    iso
+}
+
+internal fun isColorLight(color: Color): Boolean {
+    val luminance = 0.299 * color.red + 0.587 * color.green + 0.114 * color.blue
+    return luminance > 0.5
+}
+
+// ─── 分支相关弹窗 ─────────────────────────────────────────────────────────────
+

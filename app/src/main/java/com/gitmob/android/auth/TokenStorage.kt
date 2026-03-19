@@ -23,12 +23,14 @@ class TokenStorage(private val context: Context) {
         val ACCESS_TOKEN  = stringPreferencesKey("access_token")
         val USER_LOGIN    = stringPreferencesKey("user_login")
         val USER_NAME     = stringPreferencesKey("user_name")
+        val USER_EMAIL    = stringPreferencesKey("user_email")
         val AVATAR_URL    = stringPreferencesKey("avatar_url")
         val THEME_MODE    = intPreferencesKey("theme_mode")
         val ROOT_ENABLED  = booleanPreferencesKey("root_enabled")
         val LOCAL_REPOS   = stringPreferencesKey("local_repos_json")   // JSON 列表
         val BOOKMARKS     = stringPreferencesKey("file_bookmarks_json") // 自定义书签
         val LOG_LEVEL     = intPreferencesKey("log_level")
+        val TAB_STEP_BACK = booleanPreferencesKey("tab_step_back")      // 仓库详情Tab逐级返回
     }
 
     val accessToken: Flow<String?> = context.dataStore.data.map { it[Keys.ACCESS_TOKEN] }
@@ -36,12 +38,14 @@ class TokenStorage(private val context: Context) {
 
     val userProfile: Flow<Triple<String, String, String>?> = context.dataStore.data.map { prefs ->
         val login = prefs[Keys.USER_LOGIN] ?: return@map null
-        Triple(login, prefs[Keys.USER_NAME] ?: login, prefs[Keys.AVATAR_URL] ?: "")
+        val name = prefs[Keys.USER_NAME] ?: login
+        val email = prefs[Keys.USER_EMAIL] ?: "$login@users.noreply.github.com"
+        Triple(name, email, prefs[Keys.AVATAR_URL] ?: "")
     }
 
-    /** 默认浅色（LIGHT=0） */
+    /** 默认跟随系统（SYSTEM=2） */
     val themeMode: Flow<ThemeMode> = context.dataStore.data.map {
-        ThemeMode.fromInt(it[Keys.THEME_MODE] ?: ThemeMode.LIGHT.value)
+        ThemeMode.fromInt(it[Keys.THEME_MODE] ?: ThemeMode.SYSTEM.value)
     }
 
     val rootEnabled: Flow<Boolean> = context.dataStore.data.map {
@@ -58,13 +62,19 @@ class TokenStorage(private val context: Context) {
         it[Keys.BOOKMARKS] ?: "[]"
     }
 
+    /** 仓库详情Tab逐级返回开关，默认关闭 */
+    val tabStepBack: Flow<Boolean> = context.dataStore.data.map {
+        it[Keys.TAB_STEP_BACK] ?: false
+    }
+
     suspend fun saveToken(token: String) {
         context.dataStore.edit { it[Keys.ACCESS_TOKEN] = token }
     }
-    suspend fun saveUser(login: String, name: String?, avatarUrl: String?) {
+    suspend fun saveUser(login: String, name: String?, email: String?, avatarUrl: String?) {
         context.dataStore.edit { prefs ->
             prefs[Keys.USER_LOGIN] = login
             prefs[Keys.USER_NAME]  = name ?: login
+            prefs[Keys.USER_EMAIL] = email ?: "$login@users.noreply.github.com"
             prefs[Keys.AVATAR_URL] = avatarUrl ?: ""
         }
     }
@@ -87,5 +97,30 @@ class TokenStorage(private val context: Context) {
         context.dataStore.edit { it[Keys.BOOKMARKS] = json }
     }
 
+    suspend fun setTabStepBack(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.TAB_STEP_BACK] = enabled }
+    }
+
     suspend fun clear() { context.dataStore.edit { it.clear() } }
+
+    // ── 多账号支持 ──────────────────────────────────────────────
+    suspend fun syncActiveAccount(info: AccountInfo) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.ACCESS_TOKEN] = info.token
+            prefs[Keys.USER_LOGIN]   = info.login
+            prefs[Keys.USER_NAME]    = info.name
+            prefs[Keys.USER_EMAIL]   = info.email
+            prefs[Keys.AVATAR_URL]   = info.avatarUrl
+        }
+    }
+
+    suspend fun clearActiveAccount() {
+        context.dataStore.edit { prefs ->
+            prefs.remove(Keys.ACCESS_TOKEN)
+            prefs.remove(Keys.USER_LOGIN)
+            prefs.remove(Keys.USER_NAME)
+            prefs.remove(Keys.USER_EMAIL)
+            prefs.remove(Keys.AVATAR_URL)
+        }
+    }
 }

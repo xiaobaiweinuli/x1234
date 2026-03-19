@@ -1,9 +1,13 @@
 package com.gitmob.android.ui.filepicker
 
 import android.os.Environment
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -38,6 +42,7 @@ data class FileEntry(
     val isDir: Boolean,
     val isGitRepo: Boolean = false,
     val size: Long = 0L,
+    val lastModified: Long = 0L,
 )
 
 /**
@@ -63,25 +68,27 @@ fun BookmarkPath.resolveIcon(): ImageVector = when (iconKey.orEmpty()) {
     else             -> Icons.Default.Folder
 }
 
-private fun defaultBookmarks(rootEnabled: Boolean): List<BookmarkPath> = buildList {
-    add(BookmarkPath("sdcard",   Environment.getExternalStorageDirectory().absolutePath, "SdCard"))
-    add(BookmarkPath("Download", "${Environment.getExternalStorageDirectory()}/Download", "Download"))
-    // Termux home 跨 App 需要 root 才能访问
-    add(BookmarkPath("Termux", "/data/data/com.termux/files/home", "Terminal", requiresRoot = true))
-    if (rootEnabled) {
-        add(BookmarkPath("/data",   "/data",   "Storage",  requiresRoot = true))
-        add(BookmarkPath("/system", "/system", "Memory",   requiresRoot = true))
-        add(BookmarkPath("/",       "/",       "Folder",   requiresRoot = true))
-    }
-}
+private fun defaultBookmarks(rootEnabled: Boolean): List<BookmarkPath> = emptyList()
 
 enum class PickerMode { DIRECTORY, MULTI_FILE }
+enum class SortType { NAME, DATE, SIZE, TYPE }
+enum class SortOrder { ASCENDING, DESCENDING }
 
 // ─── 工具 ─────────────────────────────────────────────────────────────────────
 
-private fun isPrivilegedPath(path: String) =
-    path.startsWith("/data") || path.startsWith("/system") ||
-    path == "/"              || path.startsWith("/proc")   || path.startsWith("/dev")
+private fun isPrivilegedPath(path: String): Boolean {
+    // 明确不需要root权限的路径
+    if (path.startsWith("/storage/emulated/")) return false
+    if (path.startsWith("/sdcard")) return false
+    if (path.startsWith("/mnt/sdcard")) return false
+    
+    // 需要root权限的系统路径
+    return path.startsWith("/data") || path.startsWith("/system") ||
+           path == "/"              || path.startsWith("/proc")   || path.startsWith("/dev") ||
+           path.startsWith("/sbin") || path.startsWith("/sys")    || path.startsWith("/vendor") ||
+           path.startsWith("/apex") || path.startsWith("/config") || path.startsWith("/cache") ||
+           path.startsWith("/acct") || path.startsWith("/mnt")    || path.startsWith("/oem")
+}
 
 private fun formatSize(bytes: Long) = when {
     bytes < 1024L         -> "${bytes}B"
@@ -101,23 +108,50 @@ private suspend fun listViaRoot(path: String): List<FileEntry> {
             RootManager.exec("test -d \"$fullPath/.git\" && echo 1 || echo 0")
                 .firstOrNull()?.trim() == "1"
         } catch (_: Exception) { false }
-        FileEntry(path = fullPath, name = name, isDir = isDir, isGitRepo = isGit)
-    }.sortedWith(compareBy({ !it.isDir }, { it.name.lowercase() }))
+        FileEntry(
+            path = fullPath, 
+            name = name, 
+            isDir = isDir, 
+            isGitRepo = isGit,
+            size = 0L,
+            lastModified = 0L
+        )
+    }
 }
 
 /** 普通权限列目录 */
 private fun listNormal(path: String): List<FileEntry> {
     val files = File(path).listFiles() ?: return emptyList()
     return files
-        .sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
         .map { f ->
             FileEntry(
-                path = f.absolutePath, name = f.name,
+                path = f.absolutePath, 
+                name = f.name,
                 isDir = f.isDirectory,
                 isGitRepo = f.isDirectory && File(f, ".git").exists(),
                 size = if (!f.isDirectory) f.length() else 0L,
+                lastModified = f.lastModified()
             )
         }
+}
+
+/** 排序文件列表 */
+private fun sortFiles(
+    files: List<FileEntry>,
+    sortType: SortType,
+    sortOrder: SortOrder,
+    showHidden: Boolean
+): List<FileEntry> {
+    val filtered = if (showHidden) files else files.filter { !it.name.startsWith(".") }
+    
+    val sorted = when (sortType) {
+        SortType.NAME -> filtered.sortedBy { it.name.lowercase() }
+        SortType.DATE -> filtered.sortedBy { it.lastModified }
+        SortType.SIZE -> filtered.sortedWith(compareBy({ !it.isDir }, { it.size }))
+        SortType.TYPE -> filtered.sortedWith(compareBy({ !it.isDir }, { it.name.lowercase() }))
+    }
+    
+    return if (sortOrder == SortOrder.DESCENDING) sorted.reversed() else sorted
 }
 
 // ─── 主 Composable ────────────────────────────────────────────────────────────
@@ -132,6 +166,7 @@ fun FilePickerScreen(
     customBookmarks: List<BookmarkPath> = emptyList(),
     onAddBookmark: ((BookmarkPath) -> Unit)? = null,
     onRemoveBookmark: ((BookmarkPath) -> Unit)? = null,
+    onEditBookmark: ((BookmarkPath) -> Unit)? = null,
     onConfirm: (selectedDir: String, selectedFiles: List<String>) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -144,11 +179,30 @@ fun FilePickerScreen(
     var errorMsg   by remember { mutableStateOf<String?>(null) }
     val selected = remember { mutableStateMapOf<String, Boolean>() }
 
-    var showSidebar      by remember { mutableStateOf(true) }
+    var showMoreMenu     by remember { mutableStateOf(false) }
     var newDirDialog     by remember { mutableStateOf(false) }
     var newDirName       by remember { mutableStateOf("") }
+    var showBookmarkPanel by remember { mutableStateOf(false) }
     var bookmarkDialog   by remember { mutableStateOf(false) }
     var bookmarkLabel    by remember { mutableStateOf("") }
+    var bookmarkEntry    by remember { mutableStateOf<FileEntry?>(null) }
+    var renameDialog     by remember { mutableStateOf(false) }
+    var renameEntry      by remember { mutableStateOf<FileEntry?>(null) }
+    var newName          by remember { mutableStateOf("") }
+    var deleteDialog     by remember { mutableStateOf(false) }
+    var deleteEntry      by remember { mutableStateOf<FileEntry?>(null) }
+    var contextMenuEntry by remember { mutableStateOf<FileEntry?>(null) }
+    var showContextMenu  by remember { mutableStateOf(false) }
+    var showBookmarkMenu by remember { mutableStateOf(false) }
+    var bookmarkMenuEntry by remember { mutableStateOf<BookmarkPath?>(null) }
+    var editBookmarkDialog by remember { mutableStateOf(false) }
+    var editBookmarkEntry by remember { mutableStateOf<BookmarkPath?>(null) }
+    var editBookmarkLabel by remember { mutableStateOf("") }
+    var editBookmarkPath by remember { mutableStateOf("") }
+
+    var sortType by remember { mutableStateOf(SortType.TYPE) }
+    var sortOrder by remember { mutableStateOf(SortOrder.ASCENDING) }
+    var showHidden by remember { mutableStateOf(false) }
 
     val isPrivileged = remember(currentPath) { isPrivilegedPath(currentPath) }
     val accentColor  = if (isPrivileged && rootEnabled) Color(0xFFFF6B00) else Coral
@@ -158,8 +212,8 @@ fun FilePickerScreen(
     val onBgSecondary : Color = if (isPrivileged && rootEnabled) Color(0xFFCCA870) else c.textSecondary
     val onBgTertiary  : Color = if (isPrivileged && rootEnabled) Color(0xFF997050) else c.textTertiary
 
-    val allBookmarks = remember(rootEnabled, customBookmarks) {
-        defaultBookmarks(rootEnabled) + customBookmarks
+    val allBookmarks = remember(customBookmarks) {
+        customBookmarks
     }
 
     fun loadDir(path: String) {
@@ -177,23 +231,92 @@ fun FilePickerScreen(
                         throw RuntimeException("此目录需要 Root 权限。\n请在设置中启用 Root 模式。")
                     else -> {
                         val e = listNormal(path)
-                        if (e.isEmpty() && path.contains("/storage/emulated") && !rootEnabled)
+                        // 检查目录是否可访问，而不是检查是否为空
+                        val dir = File(path)
+                        if (!dir.exists() || !dir.isDirectory || !dir.canRead()) {
                             throw RuntimeException(
-                                "无法读取此目录（Android 11+ 存储限制）。\n" +
-                                "请授予「所有文件访问权限」，或开启 Root 模式。"
+                                "无法读取此目录（权限限制）。\n" +
+                                "请检查目录权限或开启 Root 模式。"
                             )
+                        }
                         e
                     }
                 }
-                entries = result; currentPath = path
+                entries = sortFiles(result, sortType, sortOrder, showHidden); currentPath = path
             } catch (e: Exception) { errorMsg = e.message }
             finally { loading = false }
         }
     }
 
+    /** 重命名文件或目录 */
+    fun renameFile(entry: FileEntry, newName: String) {
+        scope.launch {
+            try {
+                val parentPath = File(entry.path).parent ?: return@launch
+                val newPath = "$parentPath/$newName"
+                if (isPrivileged && rootEnabled && RootManager.isGranted) {
+                    RootManager.exec("mv \"${entry.path}\" \"$newPath\"")
+                } else {
+                    File(entry.path).renameTo(File(newPath))
+                }
+                loadDir(currentPath)
+            } catch (e: Exception) {
+                errorMsg = "重命名失败：${e.message}"
+            }
+        }
+    }
+
+    /** 删除文件或目录 */
+    fun deleteFile(entry: FileEntry) {
+        scope.launch {
+            try {
+                if (isPrivileged && rootEnabled && RootManager.isGranted) {
+                    if (entry.isDir) {
+                        RootManager.exec("rm -rf \"${entry.path}\"")
+                    } else {
+                        RootManager.exec("rm \"${entry.path}\"")
+                    }
+                } else {
+                    if (entry.isDir) {
+                        File(entry.path).deleteRecursively()
+                    } else {
+                        File(entry.path).delete()
+                    }
+                }
+                loadDir(currentPath)
+            } catch (e: Exception) {
+                errorMsg = "删除失败：${e.message}"
+            }
+        }
+    }
+
     LaunchedEffect(Unit) { loadDir(currentPath) }
+    
+    LaunchedEffect(sortType, sortOrder, showHidden) {
+        loadDir(currentPath)
+    }
 
     val bgTint = if (isPrivileged && rootEnabled) Color(0xFF1A1000) else c.bgDeep
+
+    // 拦截返回键：有上级目录且可以访问则返回上级，否则关闭文件选择器
+    BackHandler {
+        val parentPath = File(currentPath).parent
+        if (parentPath != null && parentPath != currentPath) {
+            // 检查上级目录是否可以访问
+            try {
+                val parentFile = File(parentPath)
+                if (parentFile.exists() && parentFile.canRead()) {
+                    loadDir(parentPath)
+                } else {
+                    onDismiss()
+                }
+            } catch (e: Exception) {
+                onDismiss()
+            }
+        } else {
+            onDismiss()
+        }
+    }
 
     // ── 新建目录弹窗 ──────────────────────────────────────────
     if (newDirDialog) {
@@ -236,16 +359,16 @@ fun FilePickerScreen(
     }
 
     // ── 收藏弹窗 ──────────────────────────────────────────────
-    if (bookmarkDialog) {
+    if (bookmarkDialog && bookmarkEntry != null) {
         AlertDialog(
-            onDismissRequest = { bookmarkDialog = false },
+            onDismissRequest = { bookmarkDialog = false; bookmarkEntry = null },
             containerColor = c.bgCard,
-            title = { Text("收藏当前目录", color = c.textPrimary, fontWeight = FontWeight.SemiBold) },
+            title = { Text("添加书签", color = c.textPrimary, fontWeight = FontWeight.SemiBold) },
             text = {
                 OutlinedTextField(
                     value = bookmarkLabel, onValueChange = { bookmarkLabel = it },
                     singleLine = true, modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text(File(currentPath).name.ifEmpty { "根目录" }, color = c.textTertiary) },
+                    placeholder = { Text(bookmarkEntry!!.name, color = c.textTertiary) },
                     label = { Text("书签名称") },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = accentColor, unfocusedBorderColor = c.border,
@@ -258,22 +381,517 @@ fun FilePickerScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        val lbl = bookmarkLabel.ifBlank { File(currentPath).name.ifEmpty { "/" } }
+                        val lbl = bookmarkLabel.ifBlank { bookmarkEntry!!.name }
                         val bm = BookmarkPath(
-                            label = lbl, path = currentPath,
-                            iconKey = "BookmarkAdded",
-                            requiresRoot = isPrivileged, isCustom = true,
+                            label = lbl, path = bookmarkEntry!!.path,
+                            iconKey = if (bookmarkEntry!!.isDir) "Folder" else "Description",
+                            requiresRoot = isPrivilegedPath(bookmarkEntry!!.path), isCustom = true,
                         )
                         onAddBookmark?.invoke(bm)
-                        bookmarkLabel = ""; bookmarkDialog = false
+                        bookmarkLabel = ""; bookmarkDialog = false; bookmarkEntry = null
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = accentColor),
-                ) { Text("收藏") }
+                ) { Text("添加") }
             },
             dismissButton = {
-                TextButton(onClick = { bookmarkDialog = false }) { Text("取消", color = c.textSecondary) }
+                TextButton(onClick = { bookmarkDialog = false; bookmarkEntry = null }) {
+                    Text("取消", color = c.textSecondary)
+                }
             },
         )
+    }
+
+    // ── 重命名弹窗 ──────────────────────────────────────────────
+    if (renameDialog && renameEntry != null) {
+        AlertDialog(
+            onDismissRequest = { renameDialog = false; renameEntry = null },
+            containerColor = c.bgCard,
+            title = { Text("重命名", color = c.textPrimary, fontWeight = FontWeight.SemiBold) },
+            text = {
+                OutlinedTextField(
+                    value = newName, onValueChange = { newName = it },
+                    singleLine = true, modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text(renameEntry!!.name, color = c.textTertiary) },
+                    label = { Text("新名称") },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = accentColor, unfocusedBorderColor = c.border,
+                        focusedTextColor = c.textPrimary, unfocusedTextColor = c.textPrimary,
+                        focusedContainerColor = c.bgItem, unfocusedContainerColor = c.bgItem,
+                        focusedLabelColor = accentColor, unfocusedLabelColor = c.textTertiary,
+                    ),
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (newName.isNotBlank()) {
+                            renameFile(renameEntry!!, newName)
+                            newName = ""; renameDialog = false; renameEntry = null
+                        }
+                    },
+                    enabled = newName.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(containerColor = accentColor),
+                ) { Text("重命名") }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameDialog = false; renameEntry = null }) {
+                    Text("取消", color = c.textSecondary)
+                }
+            },
+        )
+    }
+
+    // ── 删除确认弹窗 ──────────────────────────────────────────
+    if (deleteDialog && deleteEntry != null) {
+        AlertDialog(
+            onDismissRequest = { deleteDialog = false; deleteEntry = null },
+            containerColor = c.bgCard,
+            title = { Text("确认删除", color = c.textPrimary, fontWeight = FontWeight.SemiBold) },
+            text = {
+                Text(
+                    "确定要删除「${deleteEntry!!.name}」吗？${if (deleteEntry!!.isDir) "此操作将递归删除目录下的所有内容。" else ""}",
+                    color = c.textSecondary,
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        deleteFile(deleteEntry!!)
+                        deleteDialog = false; deleteEntry = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = RedColor),
+                ) { Text("删除") }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteDialog = false; deleteEntry = null }) {
+                    Text("取消", color = c.textSecondary)
+                }
+            },
+        )
+    }
+
+    // ── 长按操作菜单弹窗 ──────────────────────────────────────
+    if (showContextMenu && contextMenuEntry != null) {
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = {
+                showContextMenu = false
+                contextMenuEntry = null
+            },
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable {
+                        showContextMenu = false
+                        contextMenuEntry = null
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    modifier = Modifier
+                        .width(280.dp)
+                        .clickable(enabled = false) { },
+                    colors = CardDefaults.cardColors(containerColor = c.bgCard),
+                    shape = RoundedCornerShape(16.dp),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = contextMenuEntry!!.name,
+                            color = c.textPrimary,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        
+                        // 添加书签
+                        Button(
+                            onClick = {
+                                bookmarkEntry = contextMenuEntry
+                                bookmarkLabel = contextMenuEntry!!.name
+                                showContextMenu = false
+                                contextMenuEntry = null
+                                bookmarkDialog = true
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = accentColor)
+                        ) {
+                            Icon(Icons.Default.BookmarkAdd, null, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("添加书签")
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        
+                        // 重命名
+                        Button(
+                            onClick = {
+                                renameEntry = contextMenuEntry
+                                newName = contextMenuEntry!!.name
+                                showContextMenu = false
+                                contextMenuEntry = null
+                                renameDialog = true
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = c.bgItem)
+                        ) {
+                            Icon(Icons.Default.Edit, null, tint = c.textPrimary, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("重命名", color = c.textPrimary)
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        
+                        // 删除
+                        Button(
+                            onClick = {
+                                deleteEntry = contextMenuEntry
+                                showContextMenu = false
+                                contextMenuEntry = null
+                                deleteDialog = true
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = RedColor)
+                        ) {
+                            Icon(Icons.Default.Delete, null, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("删除")
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        
+                        // 取消
+                        TextButton(
+                            onClick = {
+                                showContextMenu = false
+                                contextMenuEntry = null
+                            }
+                        ) {
+                            Text("取消", color = c.textSecondary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 书签长按菜单弹窗 ──────────────────────────────────────
+    if (showBookmarkMenu && bookmarkMenuEntry != null) {
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = {
+                showBookmarkMenu = false
+                bookmarkMenuEntry = null
+            },
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable {
+                        showBookmarkMenu = false
+                        bookmarkMenuEntry = null
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    modifier = Modifier
+                        .width(280.dp)
+                        .clickable(enabled = false) { },
+                    colors = CardDefaults.cardColors(containerColor = c.bgCard),
+                    shape = RoundedCornerShape(16.dp),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = bookmarkMenuEntry!!.label,
+                            color = c.textPrimary,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        
+                        if (bookmarkMenuEntry!!.isCustom) {
+                            // 编辑
+                            Button(
+                                onClick = {
+                                    editBookmarkEntry = bookmarkMenuEntry
+                                    editBookmarkLabel = bookmarkMenuEntry!!.label
+                                    editBookmarkPath = bookmarkMenuEntry!!.path
+                                    showBookmarkMenu = false
+                                    bookmarkMenuEntry = null
+                                    editBookmarkDialog = true
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.buttonColors(containerColor = accentColor)
+                            ) {
+                                Icon(Icons.Default.Edit, null, modifier = Modifier.size(20.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("编辑")
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            
+                            // 删除
+                            Button(
+                                onClick = {
+                                    onRemoveBookmark?.invoke(bookmarkMenuEntry!!)
+                                    showBookmarkMenu = false
+                                    bookmarkMenuEntry = null
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.buttonColors(containerColor = RedColor)
+                            ) {
+                                Icon(Icons.Default.Delete, null, modifier = Modifier.size(20.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("删除")
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                        
+                        // 取消
+                        TextButton(
+                            onClick = {
+                                showBookmarkMenu = false
+                                bookmarkMenuEntry = null
+                            }
+                        ) {
+                            Text("取消", color = c.textSecondary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 编辑书签弹窗 ──────────────────────────────────────────
+    if (editBookmarkDialog && editBookmarkEntry != null) {
+        AlertDialog(
+            onDismissRequest = { editBookmarkDialog = false; editBookmarkEntry = null },
+            containerColor = c.bgCard,
+            title = { Text("编辑书签", color = c.textPrimary, fontWeight = FontWeight.SemiBold) },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = editBookmarkLabel, onValueChange = { editBookmarkLabel = it },
+                        singleLine = true, modifier = Modifier.fillMaxWidth(),
+                        label = { Text("书签名称") },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = accentColor, unfocusedBorderColor = c.border,
+                            focusedTextColor = c.textPrimary, unfocusedTextColor = c.textPrimary,
+                            focusedContainerColor = c.bgItem, unfocusedContainerColor = c.bgItem,
+                            focusedLabelColor = accentColor, unfocusedLabelColor = c.textTertiary,
+                        ),
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = editBookmarkPath, onValueChange = { editBookmarkPath = it },
+                        singleLine = true, modifier = Modifier.fillMaxWidth(),
+                        label = { Text("路径") },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = accentColor, unfocusedBorderColor = c.border,
+                            focusedTextColor = c.textPrimary, unfocusedTextColor = c.textPrimary,
+                            focusedContainerColor = c.bgItem, unfocusedContainerColor = c.bgItem,
+                            focusedLabelColor = accentColor, unfocusedLabelColor = c.textTertiary,
+                        ),
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val updated = BookmarkPath(
+                            label = editBookmarkLabel,
+                            path = editBookmarkPath,
+                            iconKey = editBookmarkEntry!!.iconKey,
+                            requiresRoot = editBookmarkEntry!!.requiresRoot,
+                            isCustom = true
+                        )
+                        onEditBookmark?.invoke(updated)
+                        editBookmarkDialog = false; editBookmarkEntry = null
+                    },
+                    enabled = editBookmarkLabel.isNotBlank() && editBookmarkPath.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(containerColor = accentColor),
+                ) { Text("保存") }
+            },
+            dismissButton = {
+                TextButton(onClick = { editBookmarkDialog = false; editBookmarkEntry = null }) {
+                    Text("取消", color = c.textSecondary)
+                }
+            },
+        )
+    }
+
+    // ── 更多选项菜单 ──────────────────────────────────────────
+    if (showMoreMenu) {
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { showMoreMenu = false },
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable { showMoreMenu = false },
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    modifier = Modifier
+                        .width(300.dp)
+                        .clickable(enabled = false) { },
+                    colors = CardDefaults.cardColors(containerColor = c.bgCard),
+                    shape = RoundedCornerShape(16.dp),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            "排序方式",
+                            color = c.textPrimary,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        
+                        // 名称
+                        Row(
+                            modifier = Modifier.fillMaxWidth().clickable {
+                                sortType = SortType.NAME
+                                sortOrder = if (sortType == SortType.NAME && sortOrder == SortOrder.ASCENDING) 
+                                    SortOrder.DESCENDING else SortOrder.ASCENDING
+                            },
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = sortType == SortType.NAME,
+                                onClick = null,
+                                colors = RadioButtonDefaults.colors(selectedColor = accentColor)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("名称", color = c.textPrimary, fontSize = 14.sp)
+                            if (sortType == SortType.NAME) {
+                                Spacer(modifier = Modifier.weight(1f))
+                                Icon(
+                                    if (sortOrder == SortOrder.ASCENDING) 
+                                        Icons.Default.ArrowUpward else Icons.Default.ArrowDownward,
+                                    null,
+                                    tint = accentColor,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                        
+                        // 日期
+                        Row(
+                            modifier = Modifier.fillMaxWidth().clickable {
+                                sortType = SortType.DATE
+                                sortOrder = if (sortType == SortType.DATE && sortOrder == SortOrder.ASCENDING) 
+                                    SortOrder.DESCENDING else SortOrder.ASCENDING
+                            },
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = sortType == SortType.DATE,
+                                onClick = null,
+                                colors = RadioButtonDefaults.colors(selectedColor = accentColor)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("日期", color = c.textPrimary, fontSize = 14.sp)
+                            if (sortType == SortType.DATE) {
+                                Spacer(modifier = Modifier.weight(1f))
+                                Icon(
+                                    if (sortOrder == SortOrder.ASCENDING) 
+                                        Icons.Default.ArrowUpward else Icons.Default.ArrowDownward,
+                                    null,
+                                    tint = accentColor,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                        
+                        // 大小
+                        Row(
+                            modifier = Modifier.fillMaxWidth().clickable {
+                                sortType = SortType.SIZE
+                                sortOrder = if (sortType == SortType.SIZE && sortOrder == SortOrder.ASCENDING) 
+                                    SortOrder.DESCENDING else SortOrder.ASCENDING
+                            },
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = sortType == SortType.SIZE,
+                                onClick = null,
+                                colors = RadioButtonDefaults.colors(selectedColor = accentColor)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("大小", color = c.textPrimary, fontSize = 14.sp)
+                            if (sortType == SortType.SIZE) {
+                                Spacer(modifier = Modifier.weight(1f))
+                                Icon(
+                                    if (sortOrder == SortOrder.ASCENDING) 
+                                        Icons.Default.ArrowUpward else Icons.Default.ArrowDownward,
+                                    null,
+                                    tint = accentColor,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                        
+                        // 类型
+                        Row(
+                            modifier = Modifier.fillMaxWidth().clickable {
+                                sortType = SortType.TYPE
+                                sortOrder = if (sortType == SortType.TYPE && sortOrder == SortOrder.ASCENDING) 
+                                    SortOrder.DESCENDING else SortOrder.ASCENDING
+                            },
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = sortType == SortType.TYPE,
+                                onClick = null,
+                                colors = RadioButtonDefaults.colors(selectedColor = accentColor)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("类型", color = c.textPrimary, fontSize = 14.sp)
+                            if (sortType == SortType.TYPE) {
+                                Spacer(modifier = Modifier.weight(1f))
+                                Icon(
+                                    if (sortOrder == SortOrder.ASCENDING) 
+                                        Icons.Default.ArrowUpward else Icons.Default.ArrowDownward,
+                                    null,
+                                    tint = accentColor,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                        
+                        GmDivider()
+                        
+                        // 隐藏文件
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = showHidden,
+                                onCheckedChange = { showHidden = it },
+                                colors = CheckboxDefaults.colors(checkedColor = accentColor)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("显示隐藏文件", color = c.textPrimary, fontSize = 14.sp)
+                        }
+                        
+                        Spacer(modifier = Modifier.height(8.dp))
+                        
+                        Button(
+                            onClick = { showMoreMenu = false },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = accentColor)
+                        ) {
+                            Text("确定")
+                        }
+                    }
+                }
+            }
+        }
     }
 
     Scaffold(
@@ -281,11 +899,7 @@ fun FilePickerScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
-                        Text(title, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = onBg)
-                        Text(currentPath, fontSize = 11.sp, color = onBgTertiary,
-                            fontFamily = FontFamily.Monospace, maxLines = 1)
-                    }
+                    Text(title, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = onBg)
                 },
                 navigationIcon = {
                     IconButton(onClick = onDismiss) {
@@ -297,13 +911,8 @@ fun FilePickerScreen(
                         Box(Modifier.size(8.dp).background(Color(0xFFFF6B00), RoundedCornerShape(50)))
                         Spacer(Modifier.width(6.dp))
                     }
-                    if (onAddBookmark != null) {
-                        IconButton(onClick = { bookmarkDialog = true }) {
-                            Icon(Icons.Default.BookmarkAdd, null, tint = onBgSecondary)
-                        }
-                    }
-                    IconButton(onClick = { showSidebar = !showSidebar }) {
-                        Icon(Icons.Default.Menu, null, tint = onBgSecondary)
+                    IconButton(onClick = { showMoreMenu = true }) {
+                        Icon(Icons.Default.MoreVert, null, tint = onBgSecondary)
                     }
                     IconButton(onClick = { newDirDialog = true }) {
                         Icon(Icons.Default.CreateNewFolder, null, tint = accentColor)
@@ -326,33 +935,9 @@ fun FilePickerScreen(
             )
         },
     ) { padding ->
-        Row(Modifier.padding(padding).fillMaxSize()) {
-
-            // ── 左侧书签栏 ──────────────────────────────────────
-            AnimatedVisibility(showSidebar,
-                enter = slideInHorizontally() + fadeIn(),
-                exit  = slideOutHorizontally() + fadeOut(),
-            ) {
-                Column(
-                    modifier = Modifier.width(78.dp).fillMaxHeight().background(c.bgCard),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Spacer(Modifier.height(6.dp))
-                    allBookmarks.forEach { bm ->
-                        BookmarkItem(
-                            bm = bm,
-                            selected = currentPath.startsWith(bm.path),
-                            onClick = { loadDir(bm.path) },
-                            onRemove = if (bm.isCustom && onRemoveBookmark != null)
-                                { { onRemoveBookmark(bm) } } else null,
-                            c = c,
-                        )
-                    }
-                }
-            }
-
-            // ── 右侧文件列表 ────────────────────────────────────
-            Column(Modifier.weight(1f).fillMaxHeight()) {
+        Column(Modifier.padding(padding).fillMaxSize()) {
+            // ── 文件列表 ────────────────────────────────────
+            Column(Modifier.weight(1f).fillMaxWidth()) {
                 PickerBreadcrumbs(currentPath, accentColor, onBgTertiary, onBg, ::loadDir, c)
                 GmDivider()
 
@@ -372,8 +957,25 @@ fun FilePickerScreen(
                         Spacer(Modifier.height(4.dp))
                         Text(errorMsg!!, fontSize = 11.sp, color = onBgSecondary, lineHeight = 16.sp)
                     }
-                    entries.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("空目录", fontSize = 13.sp, color = onBgTertiary)
+                    entries.isEmpty() -> LazyColumn(contentPadding = PaddingValues(vertical = 4.dp)) {
+                        if (currentPath != "/") {
+                            item(key = "..") {
+                                FileEntryRow(
+                                    entry = FileEntry(File(currentPath).parent ?: "/", "..", true),
+                                    isSelected = false, showCheckbox = false,
+                                    textColor = onBg, textSecondary = onBgSecondary,
+                                    textTertiary = onBgTertiary, accentColor = accentColor, c = c,
+                                    onClick = { loadDir(File(currentPath).parent ?: "/") },
+                                    onLongClick = {},
+                                    onCheck = {},
+                                )
+                            }
+                        }
+                        item(key = "empty") {
+                            Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) {
+                                Text("空目录", fontSize = 13.sp, color = onBgTertiary)
+                            }
+                        }
                     }
                     else -> LazyColumn(contentPadding = PaddingValues(vertical = 4.dp)) {
                         if (currentPath != "/") {
@@ -384,6 +986,7 @@ fun FilePickerScreen(
                                     textColor = onBg, textSecondary = onBgSecondary,
                                     textTertiary = onBgTertiary, accentColor = accentColor, c = c,
                                     onClick = { loadDir(File(currentPath).parent ?: "/") },
+                                    onLongClick = {},
                                     onCheck = {},
                                 )
                             }
@@ -400,8 +1003,93 @@ fun FilePickerScreen(
                                     else if (mode == PickerMode.MULTI_FILE)
                                         selected[entry.path] = !(selected[entry.path] ?: false)
                                 },
+                                onLongClick = {
+                                    contextMenuEntry = entry
+                                    showContextMenu = true
+                                },
                                 onCheck = { checked -> selected[entry.path] = checked },
                             )
+                        }
+                    }
+                }
+            }
+            
+            // ── 底部书签栏 ────────────────────────────────────
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp)
+                    .background(c.bgCard)
+                    .clickable {
+                        showBookmarkPanel = !showBookmarkPanel
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(40.dp)
+                        .height(4.dp)
+                        .background(c.border, RoundedCornerShape(2.dp))
+                        .align(Alignment.TopCenter)
+                        .padding(top = 4.dp)
+                )
+                Text(if (showBookmarkPanel) "点击收起书签" else "点击显示书签", color = c.textTertiary, fontSize = 12.sp)
+            }
+
+            // ── 书签面板（显示在文件选择器内部）────────────────────────────
+            AnimatedVisibility(
+                visible = showBookmarkPanel,
+                enter = expandVertically(expandFrom = Alignment.Bottom),
+                exit = shrinkVertically(shrinkTowards = Alignment.Bottom)
+            ) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(300.dp),
+                    colors = CardDefaults.cardColors(containerColor = c.bgCard),
+                    shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            "书签",
+                            color = c.textPrimary,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        if (allBookmarks.isEmpty()) {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("暂无书签", color = c.textTertiary, fontSize = 14.sp)
+                            }
+                        } else {
+                            LazyColumn(
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                items(allBookmarks, key = { it.path }) { bm ->
+                                    BookmarkItemHorizontal(
+                                        bm = bm,
+                                        selected = currentPath.startsWith(bm.path),
+                                        onClick = {
+                                            loadDir(bm.path)
+                                            showBookmarkPanel = false
+                                        },
+                                        onLongClick = {
+                                            bookmarkMenuEntry = bm
+                                            showBookmarkMenu = true
+                                        },
+                                        c = c,
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -440,6 +1128,37 @@ private fun BookmarkItem(
 }
 
 @Composable
+private fun BookmarkItemHorizontal(
+    bm: BookmarkPath, selected: Boolean,
+    onClick: () -> Unit, onLongClick: () -> Unit, c: GmColors,
+) {
+    val bg   = if (selected) CoralDim else Color.Transparent
+    val tint = when {
+        selected          -> Coral
+        bm.requiresRoot   -> Color(0xFFFF6B00)
+        else              -> c.textTertiary
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth().background(bg)
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onTap = { onClick() },
+                    onLongPress = { onLongClick() }
+                )
+            }
+            .padding(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Icon(bm.resolveIcon(), null, tint = tint, modifier = Modifier.size(20.dp))
+        Column(Modifier.weight(1f)) {
+            Text(bm.label, fontSize = 13.sp, color = c.textPrimary, fontWeight = FontWeight.Medium, maxLines = 1)
+            Text(bm.path, fontSize = 10.sp, color = c.textTertiary, maxLines = 1)
+        }
+    }
+}
+
+@Composable
 private fun PickerBreadcrumbs(
     path: String, accentColor: Color, tertiaryColor: Color, primaryColor: Color,
     onNavigate: (String) -> Unit, c: GmColors,
@@ -471,17 +1190,24 @@ private fun PickerBreadcrumbs(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FileEntryRow(
     entry: FileEntry, isSelected: Boolean, showCheckbox: Boolean,
     textColor: Color, textSecondary: Color, textTertiary: Color,
     accentColor: Color, c: GmColors,
-    onClick: () -> Unit, onCheck: (Boolean) -> Unit,
+    onClick: () -> Unit, onLongClick: () -> Unit, onCheck: (Boolean) -> Unit,
 ) {
     val rowBg = if (isSelected) accentColor.copy(alpha = 0.12f) else Color.Transparent
     Row(
         modifier = Modifier.fillMaxWidth().background(rowBg)
-            .clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 10.dp),
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onTap = { onClick() },
+                    onLongPress = { onLongClick() }
+                )
+            }
+            .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {

@@ -16,7 +16,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -49,6 +51,20 @@ import androidx.compose.ui.res.painterResource
 import com.gitmob.android.R
 import com.gitmob.android.BuildConfig
 import androidx.compose.foundation.Image
+import kotlinx.coroutines.flow.first
+import androidx.compose.material.icons.filled.Logout
+import androidx.compose.material.icons.filled.NoAccounts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.NotificationsOff
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.Lifecycle
+import androidx.compose.material.icons.filled.FileUpload
+import com.gitmob.android.ui.filepicker.FilePickerScreen
+import com.gitmob.android.ui.filepicker.PickerMode
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -56,10 +72,14 @@ fun SettingsScreen(
     tokenStorage: TokenStorage,
     currentTheme: ThemeMode,
     rootEnabled: Boolean,
+    tabStepBackEnabled: Boolean,
     onThemeChange: (ThemeMode) -> Unit,
     onRootToggle: (Boolean) -> Unit,
+    onTabStepBackToggle: (Boolean) -> Unit,
     onBack: () -> Unit,
     onLogout: () -> Unit,
+    onSwitchAccount: (com.gitmob.android.auth.AccountInfo) -> Unit = {},
+    onAddAccount: () -> Unit = {},
 ) {
     val c = LocalGmColors.current
     val scope = rememberCoroutineScope()
@@ -67,10 +87,18 @@ fun SettingsScreen(
     val profile by tokenStorage.userProfile.collectAsState(initial = null)
     val logLevelIdx by tokenStorage.logLevel.collectAsState(initial = 1)
 
+    // 多账号
+    val accountStore = remember { com.gitmob.android.auth.AccountStore(context) }
+    val allAccounts by accountStore.accounts.collectAsState(initial = emptyList())
+    val activeLogin by tokenStorage.userLogin.collectAsState(initial = null)
+    var accountCardExpanded by remember { mutableStateOf(false) }
+
     var rootCheckMsg by remember { mutableStateOf<String?>(null) }
     var rootChecking by remember { mutableStateOf(false) }
     var showAbout by remember { mutableStateOf(false) }
-    var showLogViewer by remember { mutableStateOf(false) }
+    var showLogoutDialog by remember { mutableStateOf(false) }
+    var showRevokeDialog by remember { mutableStateOf(false) }
+    var showExportLogPicker by remember { mutableStateOf(false) }
 
     // 检测 MANAGE_EXTERNAL_STORAGE
     val hasAllFilesAccess = remember {
@@ -87,6 +115,44 @@ fun SettingsScreen(
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
                 Environment.isExternalStorageManager()
             else true
+    }
+
+    // 检测通知权限（Android 13+）
+    val notificationManager = context.getSystemService(android.app.NotificationManager::class.java)
+    val hasNotifPerm = remember {
+        mutableStateOf(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+                notificationManager.areNotificationsEnabled()
+            else true
+        )
+    }
+    val notifPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasNotifPerm.value = granted
+    }
+    // 从设置页返回时刷新状态
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                hasNotifPerm.value = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+                    notificationManager.areNotificationsEnabled() else true
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
+
+    fun requestNotifPerm() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            notifPermLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            // Android <13 直接跳设置
+            context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+            })
+        }
     }
 
     fun requestAllFilesAccess() {
@@ -117,17 +183,20 @@ fun SettingsScreen(
     if (showAbout) {
         AboutDialog(onDismiss = { showAbout = false })
     }
-    if (showLogViewer) {
-        LogViewerDialog(
-            tokenStorage = tokenStorage,
-            currentLevelIdx = logLevelIdx,
-            onLevelChange = { idx ->
-                scope.launch { tokenStorage.setLogLevel(idx) }
-                val level = LogLevel.entries.getOrElse(idx) { LogLevel.DEBUG }
-                LogManager.setLevel(level)
+
+    // 导出日志：用文件选择器选择保存目录
+    if (showExportLogPicker) {
+        com.gitmob.android.ui.filepicker.FilePickerScreen(
+            title       = "选择日志导出目录",
+            mode        = com.gitmob.android.ui.filepicker.PickerMode.DIRECTORY,
+            rootEnabled = rootEnabled,
+            onConfirm   = { dir, _ ->
+                showExportLogPicker = false
+                scope.launch {
+                    exportLogs(dir)
+                }
             },
-            onDismiss = { showLogViewer = false },
-            c = c,
+            onDismiss = { showExportLogPicker = false },
         )
     }
 
@@ -157,19 +226,140 @@ fun SettingsScreen(
             if (profile != null) {
                 SLabel("账号", c)
                 SCard(c) {
+                    // ── 当前活跃账号（主卡片，点击展开/收起）──
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { accountCardExpanded = !accountCardExpanded }
+                            .padding(14.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         AsyncImage(
-                            model = profile!!.third, contentDescription = null,
-                            modifier = Modifier.size(42.dp).clip(CircleShape).background(c.bgItem),
+                            model = profile!!.third.let {
+                                if (it.contains("?")) it else "$it?s=80"
+                            },
+                            contentDescription = null,
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(c.bgItem),
                         )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                profile!!.second,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 15.sp, color = c.textPrimary,
+                            )
+                            Text(
+                                "@${profile!!.first}",
+                                fontSize = 12.sp, color = c.textSecondary,
+                            )
+                        }
+                        // 展开/收起箭头（有多账号时才显示）
+                        Icon(
+                            if (accountCardExpanded) Icons.Default.ExpandLess
+                            else Icons.Default.ExpandMore,
+                            contentDescription = null,
+                            tint = c.textTertiary,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+
+                    // ── 展开内容：其他账号 + 添加账号 ──
+                    androidx.compose.animation.AnimatedVisibility(visible = accountCardExpanded) {
                         Column {
-                            Text(profile!!.second, fontWeight = FontWeight.SemiBold,
-                                fontSize = 15.sp, color = c.textPrimary)
-                            Text("@${profile!!.first}", fontSize = 12.sp, color = c.textSecondary)
+                            HorizontalDivider(color = c.border, thickness = 0.5.dp)
+
+                            // 其他账号列表
+                            val otherAccounts = allAccounts.filter { it.login != activeLogin }
+                            if (otherAccounts.isNotEmpty()) {
+                                otherAccounts.forEach { account ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                scope.launch {
+                                                    accountStore.switchAccount(account.login)
+                                                    tokenStorage.syncActiveAccount(account)
+                                                    accountCardExpanded = false
+                                                    onSwitchAccount(account)
+                                                }
+                                            }
+                                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                    ) {
+                                        AsyncImage(
+                                            model = account.avatarUrl.let {
+                                                if (it.contains("?")) it else "$it?s=80"
+                                            },
+                                            contentDescription = null,
+                                            modifier = Modifier
+                                                .size(38.dp)
+                                                .clip(CircleShape)
+                                                .background(c.bgItem),
+                                        )
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                account.displayName,
+                                                fontSize = 14.sp,
+                                                fontWeight = FontWeight.Medium,
+                                                color = c.textPrimary,
+                                            )
+                                            Text(
+                                                "@${account.login}",
+                                                fontSize = 11.sp, color = c.textSecondary,
+                                            )
+                                        }
+                                        Text(
+                                            "切换",
+                                            fontSize = 12.sp, color = Coral,
+                                            fontWeight = FontWeight.Medium,
+                                        )
+                                    }
+                                    HorizontalDivider(
+                                        color = c.border, thickness = 0.5.dp,
+                                        modifier = Modifier.padding(horizontal = 14.dp),
+                                    )
+                                }
+                            }
+
+                            // 添加账号按钮
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        accountCardExpanded = false
+                                        onAddAccount()
+                                    }
+                                    .padding(horizontal = 14.dp, vertical = 14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(38.dp)
+                                        .background(CoralDim, CircleShape),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        Icons.Default.Add, null,
+                                        tint = Coral, modifier = Modifier.size(20.dp),
+                                    )
+                                }
+                                Text(
+                                    "添加账号",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = Coral,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Icon(
+                                    Icons.Default.ChevronRight, null,
+                                    tint = c.textTertiary, modifier = Modifier.size(18.dp),
+                                )
+                            }
                         }
                     }
                 }
@@ -239,6 +429,38 @@ fun SettingsScreen(
 
                 SDivider(c)
 
+                // 仓库详情Tab逐级返回开关
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    SIconBox(
+                        color = if (tabStepBackEnabled) BlueDim else c.bgItem,
+                        icon = Icons.AutoMirrored.Filled.ArrowBack,
+                        tint = if (tabStepBackEnabled) BlueColor else c.textTertiary,
+                    )
+                    Column(Modifier.weight(1f)) {
+                        Text("仓库详情Tab逐级返回", fontSize = 15.sp, color = c.textPrimary, fontWeight = FontWeight.Medium)
+                        Text(
+                            if (tabStepBackEnabled) "已启用 · 标签页按顺序逐级返回"
+                            else "关闭 · 非文件Tab先返回文件Tab",
+                            fontSize = 12.sp, color = c.textSecondary,
+                        )
+                    }
+                    Switch(
+                        checked = tabStepBackEnabled, onCheckedChange = onTabStepBackToggle,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = BlueColor,
+                            uncheckedThumbColor = c.textTertiary,
+                            uncheckedTrackColor = c.bgItem,
+                        ),
+                    )
+                }
+
+                SDivider(c)
+
                 // 全部文件访问权限
                 SRow(
                     title = "文件访问权限",
@@ -262,22 +484,120 @@ fun SettingsScreen(
                     onClick = { if (!hasAllFilesAccess.value) requestAllFilesAccess() },
                     c = c,
                 )
+
+                SDivider(c)
+
+                // 通知权限（下载进度条通知）
+                SRow(
+                    title = "通知权限",
+                    subtitle = if (hasNotifPerm.value) "已授权 · 下载时显示进度通知"
+                               else "⚠ 未授权 · 无法显示下载进度通知",
+                    subtitleColor = if (hasNotifPerm.value) Green else Yellow,
+                    leadingIcon = {
+                        SIconBox(
+                            color = if (hasNotifPerm.value) GreenDim else YellowDim,
+                            icon  = if (hasNotifPerm.value) Icons.Default.Notifications
+                                    else Icons.Default.NotificationsOff,
+                            tint  = if (hasNotifPerm.value) Green else Yellow,
+                        )
+                    },
+                    trailing = {
+                        if (!hasNotifPerm.value) {
+                            Text("去授权", fontSize = 12.sp, color = Coral, fontWeight = FontWeight.SemiBold)
+                        } else {
+                            Icon(Icons.Default.CheckCircle, null, tint = Green, modifier = Modifier.size(18.dp))
+                        }
+                    },
+                    onClick = { if (!hasNotifPerm.value) requestNotifPerm() },
+                    c = c,
+                )
             }
 
             // ── 日志 ──────────────────────────────────────────
             SLabel("调试", c)
             SCard(c) {
-                SRow(
-                    title = "日志查看器",
-                    subtitle = "等级：${LogLevel.entries.getOrElse(logLevelIdx) { LogLevel.DEBUG }.name}",
-                    leadingIcon = {
+                // 日志等级选择（内联显示，不用弹窗）
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
                         SIconBox(c.bgItem, Icons.Default.BugReport, BlueColor)
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("日志等级", fontSize = 15.sp, color = c.textPrimary)
+                            Text(
+                                "当前：${LogLevel.entries.getOrElse(logLevelIdx) { LogLevel.DEBUG }.name}",
+                                fontSize = 12.sp, color = c.textSecondary,
+                            )
+                        }
+                    }
+                    val levels = LogLevel.entries.filter { it != LogLevel.NONE }
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        levels.forEachIndexed { idx, level ->
+                            val selected = logLevelIdx == idx
+                            val (bg, fg) = when (level) {
+                                LogLevel.VERBOSE -> Color(0x1FA78BFA) to PurpleColor
+                                LogLevel.DEBUG   -> BlueDim to BlueColor
+                                LogLevel.INFO    -> GreenDim to Green
+                                LogLevel.WARN    -> YellowDim to Yellow
+                                LogLevel.ERROR   -> RedDim to RedColor
+                                else             -> c.bgItem to c.textTertiary
+                            }
+                            FilterChip(
+                                selected = selected,
+                                onClick  = {
+                                    scope.launch { tokenStorage.setLogLevel(idx) }
+                                    LogManager.setLevel(level)
+                                },
+                                label    = { Text(level.name, fontSize = 10.sp) },
+                                colors   = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = bg,
+                                    selectedLabelColor     = fg,
+                                ),
+                                modifier = Modifier.height(28.dp),
+                            )
+                        }
+                    }
+                }
+
+                SDivider(c)
+
+                // 导出日志
+                SRow(
+                    title = "导出日志",
+                    subtitle = "选择目录保存日志文件",
+                    leadingIcon = {
+                        SIconBox(GreenDim, Icons.Default.FileUpload, Green)
                     },
                     trailing = {
                         Icon(Icons.AutoMirrored.Filled.OpenInNew, null,
                             tint = c.textTertiary, modifier = Modifier.size(16.dp))
                     },
-                    onClick = { showLogViewer = true },
+                    onClick = { showExportLogPicker = true },
+                    c = c,
+                )
+
+                SDivider(c)
+
+                // 清空日志
+                SRow(
+                    title = "清空日志",
+                    subtitle = "删除今日日志文件和内存记录",
+                    titleColor = RedColor,
+                    leadingIcon = {
+                        SIconBox(RedDim, Icons.Default.Delete, RedColor)
+                    },
+                    onClick = {
+                        LogManager.clearToday()
+                    },
                     c = c,
                 )
             }
@@ -285,10 +605,154 @@ fun SettingsScreen(
             // ── 账号操作 ──────────────────────────────────────
             SLabel("账号操作", c)
             SCard(c) {
+                // 退出登录：仅撤销当前 Token，授权 Grant 保留
                 SRow(
-                    title = "退出登录",
+                    title      = "退出登录",
+                    subtitle   = "撤销当前 Token，授权记录保留",
                     titleColor = RedColor,
-                    onClick = onLogout, c = c,
+                    leadingIcon = {
+                        SIconBox(
+                            color = androidx.compose.ui.graphics.Color(0x22F87171),
+                            icon  = Icons.AutoMirrored.Filled.Logout,
+                            tint  = RedColor,
+                        )
+                    },
+                    onClick = { showLogoutDialog = true }, c = c,
+                )
+                HorizontalDivider(
+                    color     = c.border,
+                    thickness = 0.5.dp,
+                    modifier  = Modifier.padding(horizontal = 12.dp),
+                )
+                // 取消所有授权：彻底删除 Grant，需重新完整授权
+                SRow(
+                    title      = "取消所有授权",
+                    subtitle   = "彻底移除 GitMob 的 GitHub 授权",
+                    titleColor = RedColor,
+                    leadingIcon = {
+                        SIconBox(
+                            color = androidx.compose.ui.graphics.Color(0x22F87171),
+                            icon  = Icons.Default.NoAccounts,
+                            tint  = RedColor,
+                        )
+                    },
+                    onClick = { showRevokeDialog = true }, c = c,
+                )
+            }
+
+            // ── 退出登录确认弹窗 ──
+            if (showLogoutDialog) {
+                AlertDialog(
+                    onDismissRequest = { showLogoutDialog = false },
+                    containerColor   = c.bgCard,
+                    icon  = { Icon(Icons.AutoMirrored.Filled.Logout, null, tint = RedColor) },
+                    title = { Text("退出登录", color = c.textPrimary, fontWeight = FontWeight.SemiBold) },
+                    text  = {
+                        Text(
+                            "将撤销当前 Token 并退出登录。\n\nGitHub 授权记录保留，下次可快速重新登录。",
+                            fontSize = 14.sp, color = c.textSecondary, lineHeight = 22.sp,
+                        )
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                showLogoutDialog = false
+                                scope.launch {
+                                    val login = activeLogin ?: return@launch
+                                    val token = tokenStorage.accessToken.first()
+                                    // 撤销服务端 token
+                                    if (!token.isNullOrBlank()) {
+                                        com.gitmob.android.auth.OAuthManager.revokeToken(token)
+                                    }
+                                    // 从账号列表移除，获取剩余账号
+                                    val remaining = accountStore.removeAccount(login)
+                                    if (remaining.isNotEmpty()) {
+                                        // 切换到下一个账号
+                                        val next = remaining.first()
+                                        tokenStorage.syncActiveAccount(next)
+                                        com.gitmob.android.api.ApiClient.rebuild()
+                                        onSwitchAccount(next)
+                                    } else {
+                                        // 无剩余账号，清空并跳登录页
+                                        tokenStorage.clearActiveAccount()
+                                        onLogout()
+                                    }
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = RedColor),
+                        ) { Text("退出登录") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showLogoutDialog = false }) {
+                            Text("取消", color = c.textSecondary)
+                        }
+                    },
+                )
+            }
+
+            // ── 取消所有授权确认弹窗 ──
+            if (showRevokeDialog) {
+                AlertDialog(
+                    onDismissRequest = { showRevokeDialog = false },
+                    containerColor   = c.bgCard,
+                    icon  = { Icon(Icons.Default.NoAccounts, null, tint = RedColor) },
+                    title = { Text("取消授权", color = c.textPrimary, fontWeight = FontWeight.SemiBold) },
+                    text  = {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text(
+                                "这将彻底删除 GitMob 在你的 GitHub 账号中的授权记录，包括所有关联 Token。",
+                                fontSize = 14.sp, color = c.textSecondary, lineHeight = 22.sp,
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(
+                                        androidx.compose.ui.graphics.Color(0x22F87171),
+                                        RoundedCornerShape(8.dp),
+                                    )
+                                    .padding(10.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(Icons.Default.Warning, null,
+                                    tint = RedColor, modifier = Modifier.size(16.dp))
+                                Text("操作后需重新完整授权才能登录",
+                                    fontSize = 12.sp, color = RedColor)
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                showRevokeDialog = false
+                                scope.launch {
+                                    val login = activeLogin ?: return@launch
+                                    val token = tokenStorage.accessToken.first()
+                                    // 彻底删除 Grant
+                                    if (!token.isNullOrBlank()) {
+                                        com.gitmob.android.auth.OAuthManager.deleteGrant(token)
+                                    }
+                                    // 从账号列表移除
+                                    val remaining = accountStore.removeAccount(login)
+                                    if (remaining.isNotEmpty()) {
+                                        val next = remaining.first()
+                                        tokenStorage.syncActiveAccount(next)
+                                        com.gitmob.android.api.ApiClient.rebuild()
+                                        onSwitchAccount(next)
+                                    } else {
+                                        tokenStorage.clearActiveAccount()
+                                        onLogout()
+                                    }
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = RedColor),
+                        ) { Text("确认取消授权") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showRevokeDialog = false }) {
+                            Text("取消", color = c.textSecondary)
+                        }
+                    },
                 )
             }
 
@@ -377,7 +841,7 @@ fun AboutDialog(onDismiss: () -> Unit) {
             // 社区
             AboutSection(title = "社区", c = c) {
                 AboutLinkRow(
-                    icon = Icons.Default.Send,
+                    icon = Icons.AutoMirrored.Filled.Send,
                     label = "Telegram 群组",
                     sub = "t.me/MyResNav",
                     url = "https://t.me/MyResNav",
@@ -451,125 +915,32 @@ private fun AboutLinkRow(
     }
 }
 
-// ─── 日志查看器弹窗 ───────────────────────────────────────────────────────────
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun LogViewerDialog(
-    tokenStorage: TokenStorage,
-    currentLevelIdx: Int,
-    onLevelChange: (Int) -> Unit,
-    onDismiss: () -> Unit,
-    c: GmColors,
-) {
-    val scope = rememberCoroutineScope()
-    val context = LocalContext.current
-    var refreshKey by remember { mutableStateOf(0) }
-    val logs = remember(refreshKey) { LogManager.recent(200) }
-    val levels = LogLevel.entries.filter { it != LogLevel.NONE }
+// ─── 日志导出工具 ──────────────────────────────────────────────────────────────
 
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth(0.95f)
-                .fillMaxHeight(0.85f)
-                .background(c.bgCard, RoundedCornerShape(20.dp))
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            // 标题行
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.BugReport, null, tint = BlueColor, modifier = Modifier.size(20.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("日志查看器", fontWeight = FontWeight.Bold, fontSize = 16.sp,
-                    color = c.textPrimary, modifier = Modifier.weight(1f))
-                IconButton(onClick = { refreshKey++; LogManager.clearToday() }, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Default.Delete, null, tint = RedColor, modifier = Modifier.size(16.dp))
+/**
+ * 将当日日志文件复制到用户选择的目录。
+ * 若内存队列有日志但文件不存在，先把内存日志落盘再复制。
+ */
+private suspend fun exportLogs(destDir: String) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+    try {
+        val logFile = LogManager.currentLogFile() ?: return@withContext
+        // 若文件尚不存在，把内存队列强制写盘
+        if (!logFile.exists()) {
+            val entries = LogManager.recent(5000)
+            if (entries.isEmpty()) return@withContext
+            logFile.parentFile?.mkdirs()
+            logFile.bufferedWriter().use { w ->
+                entries.reversed().forEach { e ->
+                    w.write("${e.time} [${e.level.tag}] ${e.tag}: ${e.msg}")
+                    w.newLine()
                 }
-                IconButton(onClick = { refreshKey++ }, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Default.Refresh, null, tint = c.textSecondary, modifier = Modifier.size(16.dp))
-                }
-            }
-
-            // 等级选择
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("最低记录等级", fontSize = 11.sp, color = c.textTertiary)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    levels.forEachIndexed { idx, level ->
-                        val selected = currentLevelIdx == idx
-                        val (bg, fg) = when (level) {
-                            LogLevel.VERBOSE -> Color(0x1FA78BFA) to PurpleColor
-                            LogLevel.DEBUG   -> BlueDim to BlueColor
-                            LogLevel.INFO    -> GreenDim to Green
-                            LogLevel.WARN    -> YellowDim to Yellow
-                            LogLevel.ERROR   -> RedDim to RedColor
-                            else -> c.bgItem to c.textTertiary
-                        }
-                        FilterChip(
-                            selected = selected,
-                            onClick  = { onLevelChange(idx) },
-                            label    = { Text(level.name, fontSize = 10.sp) },
-                            colors   = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = bg,
-                                selectedLabelColor     = fg,
-                            ),
-                            modifier = Modifier.height(28.dp),
-                        )
-                    }
-                }
-            }
-
-            HorizontalDivider(color = c.border, thickness = 0.5.dp)
-
-            // 日志列表
-            LazyColumn(
-                modifier = Modifier.weight(1f)
-                    .background(Color(0xFF080C12), RoundedCornerShape(10.dp))
-                    .padding(8.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-                reverseLayout = false,
-            ) {
-                if (logs.isEmpty()) {
-                    item { Text("暂无日志", fontSize = 12.sp, color = Color(0xFF5C6580),
-                        modifier = Modifier.padding(8.dp)) }
-                } else {
-                    items(logs) { entry ->
-                        val color = when (entry.level) {
-                            LogLevel.VERBOSE -> PurpleColor
-                            LogLevel.DEBUG   -> BlueColor
-                            LogLevel.INFO    -> Green
-                            LogLevel.WARN    -> Yellow
-                            LogLevel.ERROR   -> RedColor
-                            else -> Color(0xFF9BA3BA)
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text("${entry.time} [${entry.level.tag}]",
-                                fontSize = 10.sp, color = Color(0xFF5C6580),
-                                fontFamily = FontFamily.Monospace)
-                            Text("${entry.tag}: ${entry.msg}",
-                                fontSize = 10.sp, color = color,
-                                fontFamily = FontFamily.Monospace,
-                                lineHeight = 14.sp)
-                        }
-                    }
-                }
-            }
-
-            // 日志文件信息
-            val logFile = LogManager.currentLogFile()
-            Text(
-                "日志文件：${logFile?.absolutePath ?: "未初始化"}",
-                fontSize = 10.sp, color = c.textTertiary,
-                fontFamily = FontFamily.Monospace,
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
-            )
-
-            TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
-                Text("关闭", color = Coral)
             }
         }
+        val dest = java.io.File(destDir, logFile.name)
+        logFile.copyTo(dest, overwrite = true)
+        LogManager.i("Settings", "日志已导出到 ${dest.absolutePath}")
+    } catch (e: Exception) {
+        LogManager.e("Settings", "日志导出失败", e)
     }
 }
 

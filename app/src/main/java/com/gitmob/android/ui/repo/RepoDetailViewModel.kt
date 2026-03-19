@@ -1,44 +1,17 @@
 package com.gitmob.android.ui.repo
 
 import android.app.Application
+import android.content.Intent
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import com.gitmob.android.api.*
+import com.gitmob.android.auth.TokenStorage
 import com.gitmob.android.data.RepoRepository
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
-data class RepoDetailState(
-    val repo: GHRepo? = null,
-    val branches: List<GHBranch> = emptyList(),
-    val commits: List<GHCommit> = emptyList(),
-    val contents: List<GHContent> = emptyList(),
-    val currentPath: String = "",
-    val currentBranch: String = "",
-    val isStarred: Boolean = false,
-    val loading: Boolean = false,
-    val contentsLoading: Boolean = false,
-    val error: String? = null,
-    val tab: Int = 0,
-    val prs: List<GHPullRequest> = emptyList(),
-    val issues: List<GHIssue> = emptyList(),
-    val selectedCommit: GHCommitFull? = null,
-    val commitDetailLoading: Boolean = false,
-    val selectedFilePatch: Pair<String,String>? = null,  // filename to patch
-    // Reset / Revert 操作状态
-    val gitOpInProgress: Boolean = false,   // 操作进行中（显示 loading）
-    val gitOpResult: GitOpResult? = null,   // 操作结果（成功/失败弹窗）
-    val toast: String? = null,
-)
-
-/** Reset / Revert 操作结果 */
-data class GitOpResult(
-    val success: Boolean,
-    val opName: String,       // "回滚" / "撤销"
-    val detail: String,       // 成功/失败详情
-    val newSha: String? = null,
-)
 
 class RepoDetailViewModel(app: Application, savedStateHandle: SavedStateHandle) : AndroidViewModel(app) {
 
@@ -46,10 +19,34 @@ class RepoDetailViewModel(app: Application, savedStateHandle: SavedStateHandle) 
     val repoName: String = savedStateHandle["repo"] ?: ""
 
     private val repository = RepoRepository()
+    private val tokenStorage = TokenStorage(app)
     private val _state = MutableStateFlow(RepoDetailState())
     val state = _state.asStateFlow()
 
-    init { loadAll() }
+    init {
+        // 当前登录用户与组织（用于仓库转移等）
+        viewModelScope.launch {
+            tokenStorage.userProfile.collect { profile ->
+                if (profile != null) {
+                    _state.update {
+                        it.copy(
+                            userLogin  = profile.first,
+                            userAvatar = profile.third,
+                        )
+                    }
+                    loadOrgs()
+                }
+            }
+        }
+        loadAll()
+    }
+
+    private fun loadOrgs() = viewModelScope.launch {
+        try {
+            val orgs = repository.getUserOrgs()
+            _state.update { it.copy(userOrgs = orgs) }
+        } catch (_: Exception) {}
+    }
 
     fun loadAll(forceRefresh: Boolean = false) = viewModelScope.launch {
         _state.update { it.copy(loading = true, error = null) }
@@ -60,21 +57,25 @@ class RepoDetailViewModel(app: Application, savedStateHandle: SavedStateHandle) 
             _state.update { it.copy(repo = r, branches = branches, currentBranch = r.defaultBranch, isStarred = starred, loading = false) }
             loadContents("", r.defaultBranch, forceRefresh)
             loadCommits(r.defaultBranch, forceRefresh = forceRefresh)
+            loadReadme(owner, repoName, r.defaultBranch)
             loadPRsAndIssues()
+            loadReleases()
+            loadWorkflows()
+            loadWorkflowRuns(null)
         } catch (e: Exception) {
             _state.update { it.copy(loading = false, error = e.message ?: "加载失败") }
         }
     }
 
     fun loadContents(path: String, ref: String? = null, forceRefresh: Boolean = false) = viewModelScope.launch {
-        _state.update { it.copy(contentsLoading = true) }
+        _state.update { it.copy(contentsLoading = true, filesRefreshing = forceRefresh) }
         try {
             val branch = ref ?: _state.value.currentBranch
             val contents = repository.getContents(owner, repoName, path, branch, forceRefresh)
                 .sortedWith(compareBy({ it.type != "dir" }, { it.name }))
-            _state.update { it.copy(contents = contents, currentPath = path, contentsLoading = false) }
+            _state.update { it.copy(contents = contents, currentPath = path, contentsLoading = false, filesRefreshing = false) }
         } catch (e: Exception) {
-            _state.update { it.copy(contentsLoading = false) }
+            _state.update { it.copy(contentsLoading = false, filesRefreshing = false) }
         }
     }
 
@@ -84,12 +85,15 @@ class RepoDetailViewModel(app: Application, savedStateHandle: SavedStateHandle) 
         loadContents(parent)
     }
 
-    fun loadCommits(sha: String? = null, forceRefresh: Boolean = false) = viewModelScope.launch {
+    fun loadCommits(sha: String? = null, path: String? = null, forceRefresh: Boolean = false) = viewModelScope.launch {
+        _state.update { it.copy(commitsRefreshing = forceRefresh) }
         try {
             val ref = sha ?: _state.value.currentBranch
-            val commits = repository.getCommits(owner, repoName, ref, forceRefresh)
-            _state.update { it.copy(commits = commits) }
-        } catch (_: Exception) {}
+            val commits = repository.getCommits(owner, repoName, ref, path, forceRefresh)
+            _state.update { it.copy(commits = commits, commitsRefreshing = false) }
+        } catch (_: Exception) {
+            _state.update { it.copy(commitsRefreshing = false) }
+        }
     }
 
     private fun loadPRsAndIssues() = viewModelScope.launch {
@@ -100,10 +104,192 @@ class RepoDetailViewModel(app: Application, savedStateHandle: SavedStateHandle) 
         } catch (_: Exception) {}
     }
 
+    /** 刷新分支列表 */
+    fun refreshBranches() = viewModelScope.launch {
+        _state.update { it.copy(branchesRefreshing = true) }
+        try {
+            val branches = repository.getBranches(owner, repoName, forceRefresh = true)
+            _state.update { it.copy(branches = branches, branchesRefreshing = false) }
+        } catch (_: Exception) {
+            _state.update { it.copy(branchesRefreshing = false) }
+        }
+    }
+
+    /** 刷新PR列表 */
+    fun refreshPRs() = viewModelScope.launch {
+        _state.update { it.copy(prsRefreshing = true) }
+        try {
+            val prs = repository.getPRs(owner, repoName, forceRefresh = true)
+            _state.update { it.copy(prs = prs, prsRefreshing = false) }
+        } catch (_: Exception) {
+            _state.update { it.copy(prsRefreshing = false) }
+        }
+    }
+
+    /** 刷新Issues列表 */
+    fun refreshIssues() = viewModelScope.launch {
+        _state.update { it.copy(issuesRefreshing = true) }
+        try {
+            val issues = repository.getIssues(owner, repoName, forceRefresh = true)
+            _state.update { it.copy(issues = issues, issuesRefreshing = false) }
+        } catch (_: Exception) {
+            _state.update { it.copy(issuesRefreshing = false) }
+        }
+    }
+
+    fun deleteIssue(issueNumber: Int) = viewModelScope.launch {
+        try {
+            val success = repository.deleteIssue(owner, repoName, issueNumber)
+            if (success) {
+                _state.update { it.copy(issues = it.issues.filter { issue -> issue.number != issueNumber }, toast = "已删除 Issue #$issueNumber") }
+            } else {
+                _state.update { it.copy(toast = "删除失败") }
+            }
+        } catch (e: Exception) {
+            _state.update { it.copy(toast = "删除失败：${e.message}") }
+        }
+    }
+
+    /**
+     * 获取所有可用的标签
+     */
+    fun getAllLabels(): Set<String> {
+        return _state.value.issues.flatMap { it.labels }.map { it.name }.toSet()
+    }
+
+    /**
+     * 获取所有作者
+     */
+    fun getAllAuthors(): Set<String> {
+        return _state.value.issues.map { it.user.login }.toSet()
+    }
+
+    /**
+     * 获取所有受理人
+     */
+    fun getAllAssignees(): Set<String> {
+        return emptySet()
+    }
+
+    /**
+     * 获取所有里程碑
+     */
+    fun getAllMilestones(): Set<String> {
+        return emptySet()
+    }
+
+    /**
+     * 设置Issue状态筛选
+     */
+    fun setIssueStatusFilter(status: IssueStatusFilter) {
+        _state.update { it.copy(issueFilterState = it.issueFilterState.copy(status = status)) }
+    }
+
+    /**
+     * 设置Issue排序方式
+     */
+    fun setIssueSortBy(sortBy: IssueSortBy) {
+        _state.update { it.copy(issueFilterState = it.issueFilterState.copy(sortBy = sortBy)) }
+    }
+
+    /**
+     * 切换标签选择
+     */
+    fun toggleIssueLabel(label: String) {
+        _state.update {
+            val current = it.issueFilterState.selectedLabels
+            val newSet = if (current.contains(label)) current - label else current + label
+            it.copy(issueFilterState = it.issueFilterState.copy(selectedLabels = newSet))
+        }
+    }
+
+    /**
+     * 切换作者选择
+     */
+    fun toggleIssueAuthor(author: String) {
+        _state.update {
+            val current = it.issueFilterState.selectedAuthors
+            val newSet = if (current.contains(author)) current - author else current + author
+            it.copy(issueFilterState = it.issueFilterState.copy(selectedAuthors = newSet))
+        }
+    }
+
+    /**
+     * 切换受理人选择
+     */
+    fun toggleIssueAssignee(assignee: String) {
+        _state.update {
+            val current = it.issueFilterState.selectedAssignees
+            val newSet = if (current.contains(assignee)) current - assignee else current + assignee
+            it.copy(issueFilterState = it.issueFilterState.copy(selectedAssignees = newSet))
+        }
+    }
+
+    /**
+     * 切换里程碑选择
+     */
+    fun toggleIssueMilestone(milestone: String) {
+        _state.update {
+            val current = it.issueFilterState.selectedMilestones
+            val newSet = if (current.contains(milestone)) current - milestone else current + milestone
+            it.copy(issueFilterState = it.issueFilterState.copy(selectedMilestones = newSet))
+        }
+    }
+
+    /**
+     * 清除所有筛选条件
+     */
+    fun clearIssueFilters() {
+        _state.update { it.copy(issueFilterState = IssueFilterState()) }
+    }
+
+    /**
+     * 创建新的Issue
+     */
+    fun createIssue(title: String, body: String) = viewModelScope.launch {
+        try {
+            val newIssue = repository.createIssue(owner, repoName, title, body.ifBlank { null })
+            _state.update {
+                it.copy(
+                    issues = listOf(newIssue) + it.issues,
+                    toast = "Issue创建成功"
+                )
+            }
+        } catch (e: Exception) {
+            _state.update { it.copy(toast = "创建失败：${e.message}") }
+        }
+    }
+
     fun switchBranch(branch: String) {
         _state.update { it.copy(currentBranch = branch, currentPath = "") }
         loadContents("", branch)
         loadCommits(branch)
+        loadReadme(owner, repoName, branch)
+    }
+
+    /**
+     * 加载 README 文件
+     */
+    fun loadReadme(owner: String, repo: String, ref: String) {
+        viewModelScope.launch {
+            _state.update { it.copy(readmeLoading = true, readmeContent = null) }
+            try {
+                // 尝试常见的 README 文件名
+                val readmeNames = listOf("README.md", "README.MD", "Readme.md", "readme.md", "README")
+                var content: String? = null
+                for (name in readmeNames) {
+                    try {
+                        content = repository.getFileContent(owner, repo, name, ref)
+                        break
+                    } catch (e: Exception) {
+                        continue
+                    }
+                }
+                _state.update { it.copy(readmeLoading = false, readmeContent = content) }
+            } catch (e: Exception) {
+                _state.update { it.copy(readmeLoading = false, readmeContent = null) }
+            }
+        }
     }
 
     fun setTab(t: Int) = _state.update { it.copy(tab = t) }
@@ -116,11 +302,90 @@ class RepoDetailViewModel(app: Application, savedStateHandle: SavedStateHandle) 
         } catch (_: Exception) {}
     }
 
+    fun renameRepo(newName: String, onSuccess: () -> Unit) = viewModelScope.launch {
+        try {
+            val updated = repository.updateRepo(owner, repoName, GHUpdateRepoRequest(name = newName))
+            _state.update { it.copy(repo = updated, toast = "已重命名为 $newName") }
+            onSuccess()
+        } catch (e: Exception) {
+            _state.update { it.copy(toast = "重命名失败：${e.message}") }
+        }
+    }
+
+    fun editRepo(desc: String, website: String, topics: List<String>) = viewModelScope.launch {
+        try {
+            repository.updateRepo(owner, repoName, GHUpdateRepoRequest(description = desc, homepage = website))
+            repository.replaceTopics(owner, repoName, topics)
+            val updated = repository.getRepo(owner, repoName, forceRefresh = true)
+            _state.update { it.copy(repo = updated, toast = "已更新仓库信息") }
+        } catch (e: Exception) {
+            _state.update { it.copy(toast = "更新失败：${e.message}") }
+        }
+    }
+
+    fun updateVisibility(makePrivate: Boolean) = viewModelScope.launch {
+        try {
+            repository.updateRepo(owner, repoName, GHUpdateRepoRequest(private = makePrivate))
+            val updated = repository.getRepo(owner, repoName, forceRefresh = true)
+            _state.update {
+                it.copy(
+                    repo = updated,
+                    toast = if (makePrivate) "已设置为私有仓库" else "已设置为公开仓库",
+                )
+            }
+        } catch (e: Exception) {
+            _state.update { it.copy(toast = "更新可见性失败：${e.message}") }
+        }
+    }
+
+    fun deleteRepo(onSuccess: () -> Unit) = viewModelScope.launch {
+        try {
+            repository.deleteRepo(owner, repoName)
+            _state.update { it.copy(toast = "已删除仓库 $repoName") }
+            onSuccess()
+        } catch (e: Exception) {
+            _state.update { it.copy(toast = "删除失败：${e.message}") }
+        }
+    }
+
+    fun transferRepo(targetOwner: String, newName: String?, onSuccess: () -> Unit) = viewModelScope.launch {
+        try {
+            repository.transferRepo(owner, repoName, newOwner = targetOwner, newName = newName)
+            _state.update {
+                it.copy(
+                    toast = if (newName.isNullOrBlank())
+                        "已发起转移到 $targetOwner"
+                    else
+                        "已发起转移到 $targetOwner/$newName",
+                )
+            }
+            onSuccess()
+        } catch (e: Exception) {
+            _state.update { it.copy(toast = "转移失败：${e.message}") }
+        }
+    }
+
+    fun checkNameAvailability(
+        owner: String,
+        name: String,
+        onResult: (Boolean) -> Unit,
+    ) {
+        viewModelScope.launch {
+            try {
+                val exists = repository.checkRepoExists(owner, name)
+                // exists == true 表示已存在；我们需要“可用”= false
+                onResult(!exists)
+            } catch (_: Exception) {
+                onResult(false)
+            }
+        }
+    }
+
     fun createBranch(name: String) = viewModelScope.launch {
         try {
             val sha = _state.value.branches.find { it.name == _state.value.currentBranch }?.commit?.sha ?: return@launch
             repository.createBranch(owner, repoName, name, sha)
-            val branches = repository.getBranches(owner, repoName)
+            val branches = repository.getBranches(owner, repoName, forceRefresh = true)
             _state.update { it.copy(branches = branches, toast = "已创建分支 $name") }
         } catch (e: Exception) {
             _state.update { it.copy(toast = "创建失败：${e.message}") }
@@ -130,8 +395,12 @@ class RepoDetailViewModel(app: Application, savedStateHandle: SavedStateHandle) 
     fun deleteBranch(branch: String) = viewModelScope.launch {
         try {
             repository.deleteBranch(owner, repoName, branch)
-            val branches = repository.getBranches(owner, repoName)
-            _state.update { it.copy(branches = branches, toast = "已删除分支 $branch") }
+            val branches = repository.getBranches(owner, repoName, forceRefresh = true)
+            val filteredBranches = branches.filter { it.name != branch }
+            val currentBranch = if (_state.value.currentBranch == branch) {
+                filteredBranches.firstOrNull()?.name ?: _state.value.currentBranch
+            } else _state.value.currentBranch
+            _state.update { it.copy(branches = filteredBranches, currentBranch = currentBranch, toast = "已删除分支 $branch") }
         } catch (e: Exception) {
             _state.update { it.copy(toast = "删除失败：${e.message}") }
         }
@@ -140,9 +409,10 @@ class RepoDetailViewModel(app: Application, savedStateHandle: SavedStateHandle) 
     fun renameBranch(oldName: String, newName: String) = viewModelScope.launch {
         try {
             repository.renameBranch(owner, repoName, oldName, newName)
-            val branches = repository.getBranches(owner, repoName)
+            val branches = repository.getBranches(owner, repoName, forceRefresh = true)
+            val filteredBranches = branches.filter { it.name != oldName }
             val currentBranch = if (_state.value.currentBranch == oldName) newName else _state.value.currentBranch
-            _state.update { it.copy(branches = branches, currentBranch = currentBranch, toast = "已重命名为 $newName") }
+            _state.update { it.copy(branches = filteredBranches, currentBranch = currentBranch, toast = "已重命名为 $newName") }
         } catch (e: Exception) {
             _state.update { it.copy(toast = "重命名失败：${e.message}") }
         }
@@ -151,8 +421,8 @@ class RepoDetailViewModel(app: Application, savedStateHandle: SavedStateHandle) 
     fun setDefaultBranch(branch: String) = viewModelScope.launch {
         try {
             repository.updateRepo(owner, repoName, com.gitmob.android.api.GHUpdateRepoRequest(defaultBranch = branch))
-            val updated = repository.getRepo(owner, repoName)
-            _state.update { it.copy(repo = updated, toast = "默认分支已设为 $branch") }
+            val updated = repository.getRepo(owner, repoName, forceRefresh = true)
+            _state.update { it.copy(repo = updated, currentBranch = branch, toast = "默认分支已设为 $branch") }
         } catch (e: Exception) {
             _state.update { it.copy(toast = "设置失败：${e.message}") }
         }
@@ -170,8 +440,8 @@ class RepoDetailViewModel(app: Application, savedStateHandle: SavedStateHandle) 
 
     fun clearCommitDetail() = _state.update { it.copy(selectedCommit = null, selectedFilePatch = null) }
 
-    fun openFilePatch(filename: String, patch: String) =
-        _state.update { it.copy(selectedFilePatch = filename to patch) }
+    fun openFilePatch(info: FilePatchInfo) =
+        _state.update { it.copy(selectedFilePatch = info) }
 
     fun closeFilePatch() = _state.update { it.copy(selectedFilePatch = null) }
     fun clearToast() = _state.update { it.copy(toast = null) }
@@ -242,6 +512,389 @@ class RepoDetailViewModel(app: Application, savedStateHandle: SavedStateHandle) 
                 )
             }
         }
+    }
+
+    // ─── Releases ─────────────────────────────────────────────────────────────
+    fun loadReleases() = viewModelScope.launch {
+        try {
+            val releases = repository.getReleases(owner, repoName)
+            _state.update { it.copy(releases = releases) }
+        } catch (_: Exception) {}
+    }
+
+    /** 刷新Releases列表 */
+    fun refreshReleases() = viewModelScope.launch {
+        _state.update { it.copy(releasesRefreshing = true) }
+        try {
+            val releases = repository.getReleases(owner, repoName, forceRefresh = true)
+            _state.update { it.copy(releases = releases, releasesRefreshing = false) }
+        } catch (_: Exception) {
+            _state.update { it.copy(releasesRefreshing = false) }
+        }
+    }
+
+    // ─── GitHub Actions ───────────────────────────────────────────────────────
+    fun loadWorkflows() = viewModelScope.launch {
+        try {
+            val workflows = repository.getWorkflows(owner, repoName)
+            _state.update { it.copy(workflows = workflows) }
+        } catch (_: Exception) {}
+    }
+
+    /** 刷新Actions工作流和运行记录 */
+    fun refreshActions() = viewModelScope.launch {
+        _state.update { it.copy(actionsRefreshing = true) }
+        try {
+            val workflows = repository.getWorkflows(owner, repoName)
+            val runs = repository.getWorkflowRuns(owner, repoName, null)
+            _state.update { it.copy(
+                workflows = workflows,
+                allWorkflowRuns = runs,
+                workflowRuns = runs,
+                actionsRefreshing = false
+            )}
+        } catch (_: Exception) {
+            _state.update { it.copy(actionsRefreshing = false) }
+        }
+    }
+
+    fun loadWorkflowRuns(workflowId: Long? = null) = viewModelScope.launch {
+        try {
+            val runs = repository.getWorkflowRuns(owner, repoName, workflowId)
+            _state.update { it.copy(allWorkflowRuns = runs, workflowRuns = runs) }
+        } catch (_: Exception) {}
+    }
+
+    fun selectWorkflow(workflow: GHWorkflow) {
+        val filteredRuns = _state.value.allWorkflowRuns.filter { it.workflowId == workflow.id }
+        _state.update { it.copy(selectedWorkflow = workflow, workflowRuns = filteredRuns) }
+    }
+
+    fun clearSelectedWorkflow() {
+        _state.update { it.copy(selectedWorkflow = null, workflowRuns = it.allWorkflowRuns) }
+    }
+
+    fun selectWorkflowRun(run: GHWorkflowRun) = viewModelScope.launch {
+        _state.update { it.copy(selectedWorkflowRun = run) }
+        try {
+            val jobs = repository.getWorkflowJobs(owner, repoName, run.id)
+            val artifacts = repository.getWorkflowRunArtifacts(owner, repoName, run.id)
+            _state.update { it.copy(workflowJobs = jobs, workflowArtifacts = artifacts) }
+        } catch (_: Exception) {
+            _state.update { it.copy(workflowJobs = emptyList(), workflowArtifacts = emptyList()) }
+        }
+    }
+
+    fun clearSelectedWorkflowRun() {
+        _state.update { it.copy(selectedWorkflowRun = null, workflowJobs = emptyList(), workflowArtifacts = emptyList()) }
+    }
+
+    fun deleteArtifact(artifactId: Long) = viewModelScope.launch {
+        try {
+            val success = repository.deleteArtifact(owner, repoName, artifactId)
+            if (success) {
+                _state.update { it.copy(workflowArtifacts = it.workflowArtifacts.filter { it.id != artifactId }, toast = "已删除产物") }
+            } else {
+                _state.update { it.copy(toast = "删除失败") }
+            }
+        } catch (e: Exception) {
+            _state.update { it.copy(toast = "删除失败：${e.message}") }
+        }
+    }
+
+    fun downloadArtifact(artifact: GHWorkflowArtifact) {
+        val ctx = getApplication<Application>()
+        val apiUrl = "https://api.github.com/repos/$owner/$repoName/actions/artifacts/${artifact.id}/zip"
+        val key = "artifact_${artifact.id}"
+        val existing = _state.value.downloadTaskIds[key]
+        val taskStatus = existing?.let { com.gitmob.android.util.GmDownloadManager.statusOf(it)?.value }
+        if (taskStatus is com.gitmob.android.util.DownloadStatus.Progress) {
+            // 点击暂停
+            com.gitmob.android.util.GmDownloadManager.pause(ctx, existing!!)
+        } else if (taskStatus is com.gitmob.android.util.DownloadStatus.Paused) {
+            com.gitmob.android.util.GmDownloadManager.resume(ctx, existing!!)
+        } else {
+            val id = com.gitmob.android.util.GmDownloadManager.download(ctx, apiUrl, "\${artifact.name}.zip")
+            _state.update { it.copy(downloadTaskIds = it.downloadTaskIds + (key to id), toast = "开始下载：\${artifact.name}") }
+        }
+    }
+
+    /** Release Asset API 下载（流式，带通知进度） */
+    fun downloadAsset(asset: GHAsset) {
+        val ctx = getApplication<Application>()
+        val apiUrl = asset.url.ifBlank {
+            "https://api.github.com/repos/$owner/$repoName/releases/assets/${asset.id}"
+        }
+        val key = "asset_${asset.id}"
+        val existing = _state.value.downloadTaskIds[key]
+        val taskStatus = existing?.let { com.gitmob.android.util.GmDownloadManager.statusOf(it)?.value }
+        if (taskStatus is com.gitmob.android.util.DownloadStatus.Progress) {
+            com.gitmob.android.util.GmDownloadManager.pause(ctx, existing!!)
+        } else if (taskStatus is com.gitmob.android.util.DownloadStatus.Paused) {
+            com.gitmob.android.util.GmDownloadManager.resume(ctx, existing!!)
+        } else {
+            val id = com.gitmob.android.util.GmDownloadManager.download(ctx, apiUrl, asset.name)
+            _state.update { it.copy(downloadTaskIds = it.downloadTaskIds + (key to id), toast = "开始下载：\${asset.name}") }
+        }
+    }
+
+    fun dispatchWorkflow(
+        workflowId: Long,
+        ref: String,
+        inputs: Map<String, Any>? = null,
+    ) = viewModelScope.launch {
+        try {
+            val success = repository.dispatchWorkflow(owner, repoName, workflowId, ref, inputs)
+            if (success) {
+                _state.update { it.copy(toast = "工作流已触发") }
+                kotlinx.coroutines.delay(2000)
+                loadWorkflowRuns()
+            } else {
+                _state.update { it.copy(toast = "触发工作流失败") }
+            }
+        } catch (e: Exception) {
+            _state.update { it.copy(toast = "触发工作流失败：${e.message}") }
+        }
+    }
+
+    fun deleteWorkflowRun(runId: Long) = viewModelScope.launch {
+        try {
+            val success = repository.deleteWorkflowRun(owner, repoName, runId)
+            if (success) {
+                _state.update { it.copy(toast = "运行记录已删除") }
+                loadWorkflowRuns()
+            } else {
+                _state.update { it.copy(toast = "删除失败") }
+            }
+        } catch (e: Exception) {
+            _state.update { it.copy(toast = "删除失败：${e.message}") }
+        }
+    }
+
+    fun rerunWorkflow(runId: Long) = viewModelScope.launch {
+        try {
+            val success = repository.rerunWorkflow(owner, repoName, runId)
+            if (success) {
+                _state.update { it.copy(toast = "已重新运行") }
+                kotlinx.coroutines.delay(2000)
+                loadWorkflowRuns()
+            } else {
+                _state.update { it.copy(toast = "重新运行失败") }
+            }
+        } catch (e: Exception) {
+            _state.update { it.copy(toast = "重新运行失败：${e.message}") }
+        }
+    }
+
+    fun cancelWorkflow(runId: Long) = viewModelScope.launch {
+        try {
+            val success = repository.cancelWorkflow(owner, repoName, runId)
+            if (success) {
+                _state.update { it.copy(toast = "已取消") }
+                kotlinx.coroutines.delay(2000)
+                loadWorkflowRuns()
+            } else {
+                _state.update { it.copy(toast = "取消失败") }
+            }
+        } catch (e: Exception) {
+            _state.update { it.copy(toast = "取消失败：${e.message}") }
+        }
+    }
+
+    fun loadWorkflowLogs(runId: Long) = viewModelScope.launch {
+        _state.update { it.copy(workflowLogsLoading = true, workflowLogs = null) }
+        try {
+            val logs = repository.getWorkflowLogs(owner, repoName, runId)
+            _state.update { it.copy(workflowLogs = logs, workflowLogsLoading = false) }
+        } catch (e: Exception) {
+            _state.update { it.copy(workflowLogs = null, workflowLogsLoading = false, toast = "加载日志失败：${e.message}") }
+        }
+    }
+
+    fun clearWorkflowLogs() {
+        _state.update { it.copy(workflowLogs = null) }
+    }
+
+    fun loadWorkflowInputs(workflowPath: String) = viewModelScope.launch {
+        _state.update { it.copy(workflowInputsLoading = true, workflowInputs = emptyList()) }
+        try {
+            val inputs = repository.getWorkflowInputs(owner, repoName, workflowPath, _state.value.currentBranch)
+            _state.update { it.copy(workflowInputs = inputs, workflowInputsLoading = false) }
+        } catch (e: Exception) {
+            _state.update { it.copy(workflowInputs = emptyList(), workflowInputsLoading = false) }
+        }
+    }
+
+    fun clearWorkflowInputs() {
+        _state.update { it.copy(workflowInputs = emptyList()) }
+    }
+
+    // ─── 文件操作 ──────────────────────────────────────────────────────────────
+
+    /**
+     * 创建或更新文件
+     */
+    fun createOrUpdateFile(
+        path: String,
+        message: String,
+        content: String,
+        sha: String? = null,
+        onSuccess: () -> Unit = {},
+    ) = viewModelScope.launch {
+        try {
+            repository.createOrUpdateFile(
+                owner = owner,
+                repo = repoName,
+                path = path,
+                message = message,
+                content = content,
+                sha = sha,
+                branch = _state.value.currentBranch,
+            )
+            loadContents(_state.value.currentPath, forceRefresh = true)
+            _state.update { it.copy(toast = "操作成功") }
+            onSuccess()
+        } catch (e: Exception) {
+            _state.update { it.copy(toast = "操作失败：${e.message}") }
+        }
+    }
+
+    /**
+     * 重命名文件
+     */
+    fun renameFile(
+        oldPath: String,
+        newPath: String,
+        message: String,
+        onSuccess: () -> Unit = {},
+    ) = viewModelScope.launch {
+        try {
+            val oldFile = repository.getFileInfo(owner, repoName, oldPath, _state.value.currentBranch)
+            repository.createOrUpdateFile(
+                owner = owner,
+                repo = repoName,
+                path = newPath,
+                message = message,
+                content = oldFile.content ?: "",
+                sha = null,
+                branch = _state.value.currentBranch,
+            )
+            repository.deleteFile(
+                owner = owner,
+                repo = repoName,
+                path = oldPath,
+                message = message,
+                sha = oldFile.sha,
+                branch = _state.value.currentBranch,
+            )
+            loadContents(_state.value.currentPath, forceRefresh = true)
+            _state.update { it.copy(toast = "文件已重命名") }
+            onSuccess()
+        } catch (e: Exception) {
+            _state.update { it.copy(toast = "重命名失败：${e.message}") }
+        }
+    }
+
+    /**
+     * 删除文件
+     */
+    fun deleteFile(
+        path: String,
+        message: String,
+        sha: String,
+        onSuccess: () -> Unit = {},
+    ) = viewModelScope.launch {
+        try {
+            repository.deleteFile(
+                owner = owner,
+                repo = repoName,
+                path = path,
+                message = message,
+                sha = sha,
+                branch = _state.value.currentBranch,
+            )
+            loadContents(_state.value.currentPath, forceRefresh = true)
+            _state.update { it.copy(toast = "文件已删除") }
+            onSuccess()
+        } catch (e: Exception) {
+            _state.update { it.copy(toast = "删除失败：${e.message}") }
+        }
+    }
+
+    /**
+     * 获取文件信息（包含sha）
+     */
+    fun getFileInfo(
+        path: String,
+        onSuccess: (GHContent) -> Unit = {},
+        onError: (String) -> Unit = {},
+    ) = viewModelScope.launch {
+        try {
+            val info = repository.getFileInfo(owner, repoName, path, _state.value.currentBranch)
+            onSuccess(info)
+        } catch (e: Exception) {
+            onError(e.message ?: "获取文件信息失败")
+        }
+    }
+
+    // ── 仓库订阅（Watch）─────────────────────────────────────────────────────
+
+    fun loadSubscription() = viewModelScope.launch {
+        _state.update { it.copy(subscriptionLoading = true) }
+        val sub = repository.getRepoSubscription(owner, repoName)
+        _state.update { it.copy(subscription = sub, subscriptionLoading = false) }
+    }
+
+    /**
+     * 设置订阅模式：
+     *   WatchMode.ALL_ACTIVITY  → subscribed=true,  ignored=false
+     *   WatchMode.PARTICIPATING → deleteRepoSubscription（恢复默认）
+     *   WatchMode.IGNORE        → subscribed=false, ignored=true
+     *   WatchMode.CUSTOM        → subscribed=true,  ignored=false（服务端视为所有，本地存储偏好）
+     */
+    fun setWatchMode(mode: WatchMode) = viewModelScope.launch {
+        _state.update { it.copy(subscriptionLoading = true) }
+        try {
+            val sub = when (mode) {
+                WatchMode.ALL_ACTIVITY -> repository.setRepoSubscription(owner, repoName, true, false)
+                WatchMode.IGNORE       -> repository.setRepoSubscription(owner, repoName, false, true)
+                WatchMode.CUSTOM       -> repository.setRepoSubscription(owner, repoName, true, false)
+                WatchMode.PARTICIPATING -> {
+                    repository.unsubscribeRepo(owner, repoName)
+                    null
+                }
+            }
+            _state.update { it.copy(subscription = sub, subscriptionLoading = false) }
+        } catch (e: Exception) {
+            _state.update { it.copy(subscriptionLoading = false, toast = "订阅设置失败：${e.message}") }
+        }
+    }
+
+    fun updateCustomNotify(
+        issues: Boolean? = null,
+        prs: Boolean? = null,
+        releases: Boolean? = null,
+        discussions: Boolean? = null,
+        security: Boolean? = null,
+    ) {
+        _state.update {
+            it.copy(
+                customNotifyIssues      = issues      ?: it.customNotifyIssues,
+                customNotifyPRs         = prs         ?: it.customNotifyPRs,
+                customNotifyReleases    = releases    ?: it.customNotifyReleases,
+                customNotifyDiscussions = discussions ?: it.customNotifyDiscussions,
+                customNotifySecurity    = security    ?: it.customNotifySecurity,
+            )
+        }
+    }
+
+    // ── Issue Template 解析 ──────────────────────────────────────────────────
+
+    fun loadIssueTemplates() = viewModelScope.launch {
+        if (_state.value.issueTemplates.isNotEmpty()) return@launch // 已缓存
+        _state.update { it.copy(issueTemplatesLoading = true) }
+        val templates = repository.getIssueTemplates(owner, repoName)
+        _state.update { it.copy(issueTemplates = templates, issueTemplatesLoading = false) }
     }
 
     companion object {

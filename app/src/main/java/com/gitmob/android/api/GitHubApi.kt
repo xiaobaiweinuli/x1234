@@ -75,6 +75,7 @@ interface GitHubApi {
         @Path("owner") owner: String,
         @Path("repo") repo: String,
         @Query("sha") sha: String? = null,
+        @Query("path") path: String? = null,
         @Query("per_page") perPage: Int = 30,
         @Query("page") page: Int = 1,
     ): List<GHCommit>
@@ -125,6 +126,109 @@ interface GitHubApi {
         @Query("state") state: String = "open",
         @Query("per_page") perPage: Int = 30,
     ): List<GHIssue>
+
+    @POST("repos/{owner}/{repo}/issues")
+    suspend fun createIssue(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Body body: GHCreateIssueRequest,
+    ): GHIssue
+
+    @GET("repos/{owner}/{repo}/issues/{issueNumber}")
+    suspend fun getIssue(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("issueNumber") issueNumber: Int,
+    ): GHIssue
+
+    @PATCH("repos/{owner}/{repo}/issues/{issueNumber}")
+    suspend fun updateIssue(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("issueNumber") issueNumber: Int,
+        @Body body: GHUpdateIssueRequest,
+    ): GHIssue
+
+    @DELETE("repos/{owner}/{repo}/issues/{issueNumber}")
+    suspend fun deleteIssue(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("issueNumber") issueNumber: Int,
+    ): Response<Unit>
+
+    @PUT("repos/{owner}/{repo}/issues/{issueNumber}/lock")
+    suspend fun lockIssue(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("issueNumber") issueNumber: Int,
+    ): Response<Unit>
+
+    @DELETE("repos/{owner}/{repo}/issues/{issueNumber}/lock")
+    suspend fun unlockIssue(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("issueNumber") issueNumber: Int,
+    ): Response<Unit>
+
+    @GET("repos/{owner}/{repo}/issues/{issueNumber}/subscription")
+    suspend fun getIssueSubscription(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("issueNumber") issueNumber: Int,
+    ): GHIssueSubscription
+
+    @PUT("repos/{owner}/{repo}/issues/{issueNumber}/subscription")
+    suspend fun subscribeIssue(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("issueNumber") issueNumber: Int,
+    ): GHIssueSubscription
+
+    @DELETE("repos/{owner}/{repo}/issues/{issueNumber}/subscription")
+    suspend fun unsubscribeIssue(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("issueNumber") issueNumber: Int,
+    ): Response<Unit>
+
+    // ── Issue Comments ──
+    @GET("repos/{owner}/{repo}/issues/{issueNumber}/comments")
+    suspend fun getIssueComments(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("issueNumber") issueNumber: Int,
+        @Query("per_page") perPage: Int = 100,
+    ): List<GHComment>
+
+    @POST("repos/{owner}/{repo}/issues/{issueNumber}/comments")
+    suspend fun createIssueComment(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("issueNumber") issueNumber: Int,
+        @Body body: GHCreateCommentRequest,
+    ): GHComment
+
+    @GET("repos/{owner}/{repo}/issues/comments/{commentId}")
+    suspend fun getIssueComment(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("commentId") commentId: Long,
+    ): GHComment
+
+    @PATCH("repos/{owner}/{repo}/issues/comments/{commentId}")
+    suspend fun updateIssueComment(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("commentId") commentId: Long,
+        @Body body: GHUpdateCommentRequest,
+    ): GHComment
+
+    @DELETE("repos/{owner}/{repo}/issues/comments/{commentId}")
+    suspend fun deleteIssueComment(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("commentId") commentId: Long,
+    ): Response<Unit>
 
     // ── Releases ──
     @GET("repos/{owner}/{repo}/releases")
@@ -187,6 +291,14 @@ interface GitHubApi {
         @Path("owner") owner: String,
         @Path("repo") repo: String,
         @Body body: GHUpdateRepoRequest,
+    ): GHRepo
+
+    // ── Repo transfer ──
+    @POST("repos/{owner}/{repo}/transfer")
+    suspend fun transferRepo(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Body body: GHTransferRepoRequest,
     ): GHRepo
 
     // ── Topics ──
@@ -255,4 +367,112 @@ interface GitHubApi {
         @Path("owner") owner: String,
         @Path("repo") repo: String,
     ): retrofit2.Response<GHRepo>
+
+    // ── GitHub Actions ──
+    @GET("repos/{owner}/{repo}/actions/workflows")
+    suspend fun getWorkflows(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Query("per_page") perPage: Int = 30,
+    ): GHWorkflowsResponse
+
+    @GET("repos/{owner}/{repo}/actions/runs")
+    suspend fun getWorkflowRuns(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Query("per_page") perPage: Int = 30,
+    ): GHWorkflowRunsResponse
+
+    @GET("repos/{owner}/{repo}/actions/workflows/{workflowId}/runs")
+    suspend fun getWorkflowRunsForWorkflow(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("workflowId") workflowId: Long,
+        @Query("per_page") perPage: Int = 30,
+    ): GHWorkflowRunsResponse
+
+    @GET("repos/{owner}/{repo}/actions/runs/{runId}/jobs")
+    suspend fun getWorkflowJobs(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("runId") runId: Long,
+    ): GHWorkflowJobsResponse
+
+    @POST("repos/{owner}/{repo}/actions/workflows/{workflowId}/dispatches")
+    suspend fun dispatchWorkflow(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("workflowId") workflowId: Long,
+        @Body body: GHWorkflowDispatchRequest,
+    ): Response<Unit>
+
+    @DELETE("repos/{owner}/{repo}/actions/runs/{runId}")
+    suspend fun deleteWorkflowRun(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("runId") runId: Long,
+    ): Response<Unit>
+
+    @POST("repos/{owner}/{repo}/actions/runs/{runId}/rerun")
+    suspend fun rerunWorkflow(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("runId") runId: Long,
+    ): Response<Unit>
+
+    @POST("repos/{owner}/{repo}/actions/runs/{runId}/cancel")
+    suspend fun cancelWorkflow(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("runId") runId: Long,
+    ): Response<Unit>
+
+    @GET("repos/{owner}/{repo}/actions/runs/{runId}/logs")
+    suspend fun getWorkflowLogs(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("runId") runId: Long,
+    ): Response<okhttp3.ResponseBody>
+
+    @GET("repos/{owner}/{repo}/actions/runs/{runId}/artifacts")
+    suspend fun getWorkflowRunArtifacts(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("runId") runId: Long,
+    ): GHWorkflowArtifactsResponse
+
+    @DELETE("repos/{owner}/{repo}/actions/artifacts/{artifactId}")
+    suspend fun deleteArtifact(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("artifactId") artifactId: Long,
+    ): Response<Unit>
+
+    // ── 仓库订阅（Watch）──────────────────────────────────────────
+    @GET("repos/{owner}/{repo}/subscription")
+    suspend fun getRepoSubscription(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+    ): retrofit2.Response<GHRepoSubscription>
+
+    @PUT("repos/{owner}/{repo}/subscription")
+    suspend fun setRepoSubscription(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Body body: GHRepoSubscriptionRequest,
+    ): GHRepoSubscription
+
+    @DELETE("repos/{owner}/{repo}/subscription")
+    suspend fun deleteRepoSubscription(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+    ): retrofit2.Response<Unit>
+
+    // ── Release Asset 元数据 ──────────────────────────────────────
+    @GET("repos/{owner}/{repo}/releases/assets/{assetId}")
+    suspend fun getReleaseAsset(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("assetId") assetId: Long,
+    ): GHAsset
 }

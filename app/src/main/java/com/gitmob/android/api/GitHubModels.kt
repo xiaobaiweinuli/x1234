@@ -5,6 +5,7 @@ import com.google.gson.annotations.SerializedName
 data class GHUser(
     val login: String,
     val name: String?,
+    val email: String?,
     @SerializedName("avatar_url") val avatarUrl: String?,
     @SerializedName("public_repos") val publicRepos: Int = 0,
     val followers: Int = 0,
@@ -17,6 +18,7 @@ data class GHRepo(
     val name: String,
     @SerializedName("full_name") val fullName: String,
     val description: String?,
+    val homepage: String?,
     val private: Boolean,
     @SerializedName("html_url") val htmlUrl: String,
     @SerializedName("ssh_url") val sshUrl: String,
@@ -138,11 +140,68 @@ data class GHIssue(
     val body: String?,
     @SerializedName("html_url") val htmlUrl: String,
     @SerializedName("created_at") val createdAt: String,
+    @SerializedName("updated_at") val updatedAt: String?,
     val user: GHOwner,
+    val labels: List<GHLabel> = emptyList(),
+    val comments: Int? = null,
     @SerializedName("pull_request") val pullRequest: Any? = null,
 ) {
     val isPR get() = pullRequest != null
 }
+
+data class GHLabel(
+    val id: Long,
+    val name: String,
+    val color: String,
+    val description: String?,
+)
+
+data class GHComment(
+    val id: Long,
+    val body: String,
+    val user: GHOwner,
+    @SerializedName("created_at") val createdAt: String,
+    @SerializedName("updated_at") val updatedAt: String,
+    @SerializedName("html_url") val htmlUrl: String,
+    @SerializedName("author_association") val authorAssociation: String?,
+)
+
+data class GHCreateCommentRequest(
+    val body: String,
+)
+
+data class GHUpdateCommentRequest(
+    val body: String,
+)
+
+data class GHUpdateIssueRequest(
+    val title: String? = null,
+    val body: String? = null,
+    val state: String? = null,
+    @SerializedName("state_reason") val stateReason: String? = null,
+)
+
+data class GHCreateIssueRequest(
+    val title: String,
+    val body: String? = null,
+)
+
+data class GHIssueSubscription(
+    val subscribed: Boolean,
+    val ignored: Boolean,
+    val reason: String? = null,
+    @SerializedName("created_at") val createdAt: String? = null,
+    val url: String? = null,
+    @SerializedName("repository_url") val repositoryUrl: String? = null,
+)
+
+data class GHIssueEvent(
+    val id: Long,
+    val event: String,
+    val actor: GHOwner?,
+    @SerializedName("created_at") val createdAt: String,
+    val commit_id: String? = null,
+)
 
 data class GHRelease(
     val id: Long,
@@ -157,9 +216,13 @@ data class GHRelease(
 )
 
 data class GHAsset(
+    val id: Long = 0,
     val name: String,
     val size: Long,
+    val url: String = "",                                           // API URL（Bearer 下载用）
     @SerializedName("browser_download_url") val downloadUrl: String,
+    @SerializedName("content_type") val contentType: String = "application/octet-stream",
+    @SerializedName("download_count") val downloadCount: Int = 0,
 )
 
 data class GHSSHKey(
@@ -193,6 +256,12 @@ data class GHUpdateRepoRequest(
     @SerializedName("default_branch") val defaultBranch: String? = null,
 )
 
+/** 仓库转移请求体 */
+data class GHTransferRepoRequest(
+    @SerializedName("new_owner") val newOwner: String,
+    @SerializedName("new_name") val newName: String? = null,
+)
+
 // ── Topics ──
 data class GHTopics(
     val names: List<String>,
@@ -211,9 +280,16 @@ data class GHCommitFull(
     @SerializedName("html_url") val htmlUrl: String,
     val stats: GHCommitStats?,
     val files: List<GHCommitFile>?,
+    val parents: List<GHCommitParent> = emptyList(),
 ) {
     val shortSha get() = sha.take(7)
+    val parentSha: String? get() = parents.firstOrNull()?.sha
 }
+
+data class GHCommitParent(
+    val sha: String,
+    val url: String = "",
+)
 
 data class GHCommitStats(
     val additions: Int,
@@ -228,6 +304,10 @@ data class GHCommitFile(
     val deletions: Int,
     val changes: Int,
     val patch: String?,
+    @SerializedName("previous_filename") val previousFilename: String? = null,
+    @SerializedName("blob_url") val blobUrl: String? = null,
+    @SerializedName("raw_url") val rawUrl: String? = null,
+    @SerializedName("contents_url") val contentsUrl: String? = null,
 )
 
 // ── Revert / Merge request ──
@@ -269,3 +349,228 @@ data class GHGitCommit(
 
 data class GHGitTree(val sha: String, val url: String)
 data class GHGitParent(val sha: String, val url: String)
+
+// ── GitHub Actions ─────────────────────────────────────────────
+
+data class WorkflowInput(
+    val name: String,
+    val type: String,
+    val description: String?,
+    val required: Boolean,
+    val default: Any?,
+    val options: List<String>? = null,
+)
+
+data class GHWorkflow(
+    val id: Long,
+    val name: String,
+    val path: String,
+    val state: String,
+    @SerializedName("created_at") val createdAt: String,
+    @SerializedName("updated_at") val updatedAt: String,
+    @SerializedName("html_url") val htmlUrl: String,
+)
+
+data class GHWorkflowRun(
+    val id: Long,
+    val name: String?,
+    @SerializedName("display_title") val displayTitle: String?,
+    val status: String?,
+    val conclusion: String?,
+    @SerializedName("created_at") val createdAt: String,
+    @SerializedName("updated_at") val updatedAt: String?,
+    @SerializedName("run_started_at") val runStartedAt: String?,
+    @SerializedName("html_url") val htmlUrl: String,
+    @SerializedName("workflow_id") val workflowId: Long,
+    @SerializedName("head_branch") val headBranch: String?,
+    @SerializedName("head_sha") val headSha: String?,
+    val actor: GHOwner?,
+    val path: String?,
+    @SerializedName("run_number") val runNumber: Int?,
+    val event: String?,
+)
+
+data class GHWorkflowJob(
+    val id: Long,
+    val name: String?,
+    val status: String?,
+    val conclusion: String?,
+    @SerializedName("created_at") val createdAt: String,
+    @SerializedName("started_at") val startedAt: String?,
+    @SerializedName("completed_at") val completedAt: String?,
+    @SerializedName("html_url") val htmlUrl: String,
+    val steps: List<GHWorkflowStep>?,
+)
+
+data class GHWorkflowStep(
+    val name: String?,
+    val status: String?,
+    val conclusion: String?,
+    val number: Int,
+    @SerializedName("started_at") val startedAt: String?,
+    @SerializedName("completed_at") val completedAt: String?,
+)
+
+data class GHWorkflowDispatchRequest(
+    val ref: String,
+    val inputs: Map<String, Any>? = null,
+)
+
+data class GHWorkflowInput(
+    val type: String,
+    val description: String?,
+    val default: Any?,
+    val required: Boolean = false,
+    val options: List<String>? = null,
+)
+
+data class GHWorkflowFile(
+    val name: String,
+    val content: String,
+)
+
+data class GHActionsListResponse<T>(
+    @SerializedName("total_count") val totalCount: Int,
+    val workflowRuns: List<T>? = null,
+    val workflows: List<T>? = null,
+)
+
+data class GHWorkflowsResponse(
+    @SerializedName("total_count") val totalCount: Int,
+    val workflows: List<GHWorkflow>,
+)
+
+data class GHWorkflowRunsResponse(
+    @SerializedName("total_count") val totalCount: Int,
+    @SerializedName("workflow_runs") val workflowRuns: List<GHWorkflowRun>,
+)
+
+data class GHWorkflowJobsResponse(
+    @SerializedName("total_count") val totalCount: Int,
+    val jobs: List<GHWorkflowJob>,
+)
+
+data class GHWorkflowArtifact(
+    val id: Long,
+    @SerializedName("node_id") val nodeId: String,
+    val name: String,
+    @SerializedName("size_in_bytes") val sizeInBytes: Long,
+    val url: String,
+    @SerializedName("archive_download_url") val archiveDownloadUrl: String,
+    val expired: Boolean,
+    @SerializedName("created_at") val createdAt: String,
+    @SerializedName("expires_at") val expiresAt: String,
+    @SerializedName("updated_at") val updatedAt: String,
+    val digest: String,
+    @SerializedName("workflow_run") val workflowRun: GHWorkflowRunRef,
+)
+
+data class GHWorkflowRunRef(
+    val id: Long,
+    @SerializedName("repository_id") val repositoryId: Long,
+    @SerializedName("head_branch") val headBranch: String,
+    @SerializedName("head_sha") val headSha: String,
+)
+
+data class GHWorkflowArtifactsResponse(
+    @SerializedName("total_count") val totalCount: Int,
+    val artifacts: List<GHWorkflowArtifact>,
+)
+
+// ── 仓库订阅（Watch）─────────────────────────────────────────────
+
+/**
+ * GitHub 仓库订阅状态
+ * PUT /repos/{owner}/{repo}/subscription
+ *   subscribed=true,  ignored=false → 所有活动
+ *   subscribed=false, ignored=true  → 忽略
+ *   DELETE /repos/{owner}/{repo}/subscription  → 仅参与后@提及（默认）
+ *
+ * "自定义"的细粒度订阅 GitHub REST API 不支持，
+ * 用本地 SharedPreferences 存储用户偏好，并对服务端设为 subscribed=true。
+ */
+data class GHRepoSubscription(
+    val subscribed: Boolean,
+    val ignored: Boolean,
+    @SerializedName("created_at") val createdAt: String? = null,
+    val reason: String? = null,
+)
+
+data class GHRepoSubscriptionRequest(
+    val subscribed: Boolean,
+    val ignored: Boolean,
+)
+
+// ── Issue Template（YAML Forms / Markdown front matter）──────────
+
+/**
+ * 解析后的 Issue 模板
+ */
+data class IssueTemplate(
+    val name: String,         // 模板名称（供用户选择）
+    val about: String = "",   // 简介
+    val title: String = "",   // 预填标题
+    val labels: List<String> = emptyList(),
+    val body: String = "",    // Markdown 模板正文（.md 格式）
+    val fields: List<IssueField> = emptyList(), // YAML Forms 字段（.yml 格式）
+    val isForm: Boolean = false, // true=YAML Forms，false=Markdown
+)
+
+/** YAML Forms 字段类型 */
+sealed class IssueField {
+    abstract val id: String
+    abstract val label: String
+    abstract val description: String
+    abstract val required: Boolean
+
+    data class InputField(
+        override val id: String,
+        override val label: String,
+        override val description: String = "",
+        override val required: Boolean = false,
+        val placeholder: String = "",
+        val value: String = "",
+    ) : IssueField()
+
+    data class TextareaField(
+        override val id: String,
+        override val label: String,
+        override val description: String = "",
+        override val required: Boolean = false,
+        val placeholder: String = "",
+        val value: String = "",
+        val render: String = "",
+    ) : IssueField()
+
+    data class DropdownField(
+        override val id: String,
+        override val label: String,
+        override val description: String = "",
+        override val required: Boolean = false,
+        val options: List<String> = emptyList(),
+        val multiple: Boolean = false,
+        val selectedIndices: Set<Int> = emptySet(),
+    ) : IssueField()
+
+    data class CheckboxesField(
+        override val id: String,
+        override val label: String,
+        override val description: String = "",
+        override val required: Boolean = false,
+        val options: List<CheckboxOption> = emptyList(),
+    ) : IssueField()
+
+    data class MarkdownField(
+        override val id: String,
+        override val label: String = "",
+        override val description: String = "",
+        override val required: Boolean = false,
+        val value: String = "",  // 展示用纯文本
+    ) : IssueField()
+}
+
+data class CheckboxOption(
+    val label: String,
+    val required: Boolean = false,
+    val checked: Boolean = false,
+)

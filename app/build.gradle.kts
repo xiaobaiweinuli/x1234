@@ -22,7 +22,6 @@ android {
         manifestPlaceholders["appScheme"] = "gitmob"
         manifestPlaceholders["appHost"] = "oauth"
     }
-
     signingConfigs {
         create("release") {
             storeFile = System.getenv("KEYSTORE_PATH")?.let { file(it) }
@@ -74,6 +73,7 @@ android {
                 "META-INF/*.DSA",
                 "META-INF/services/org.eclipse.jgit.*",
                 "mozilla/public-suffix-list.txt",
+                "OSGI-INF/l10n/plugin.properties",
             )
         }
     }
@@ -102,10 +102,13 @@ dependencies {
     implementation(libs.gson)
     implementation(libs.coil.compose)
     implementation(libs.kotlinx.coroutines.android)
-    implementation(libs.libsu.core)
-    implementation(libs.libsu.service)
     // JGit：纯 Java Git 实现，无需外部 git 可执行文件
     implementation(libs.jgit)
     implementation(libs.jgit.apache.http)
+    // Jackson YAML：用于解析 GitHub Actions workflow YAML 文件
+    implementation(libs.jackson.dataformat.yaml)
+    implementation(libs.jackson.module.kotlin)
+    // Compose Markdown：用于显示 Markdown 文本
+    implementation(libs.compose.markdown)
     debugImplementation(libs.androidx.ui.tooling)
 }

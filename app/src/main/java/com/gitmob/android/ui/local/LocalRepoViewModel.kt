@@ -26,23 +26,12 @@ data class LocalRepoListState(
     val pendingCloneUrl: String = "",       // 待克隆的 GitHub repo url
 )
 
-/** 推送向导步骤 */
-sealed class PushWizardStep {
-    object None : PushWizardStep()
-    data class SelectRemote(val repoId: String) : PushWizardStep()
-    data class Running(val repoId: String, val log: List<String> = emptyList()) : PushWizardStep()
-    data class Done(val success: Boolean, val log: List<String>) : PushWizardStep()
-}
-
 class LocalRepoViewModel(app: Application) : AndroidViewModel(app) {
     private val storage = LocalRepoStorage(app)
     private val gson = com.google.gson.Gson()
     private val tokenStorage = TokenStorage(app)
     private val _state = MutableStateFlow(LocalRepoListState())
     val state = _state.asStateFlow()
-
-    private val _wizardStep = MutableStateFlow<PushWizardStep>(PushWizardStep.None)
-    val wizardStep = _wizardStep.asStateFlow()
 
     private var token: String = ""
 
@@ -107,88 +96,6 @@ class LocalRepoViewModel(app: Application) : AndroidViewModel(app) {
         } catch (e: Exception) { toast("创建失败：${e.message}") }
     }
 
-    /** 一键上云：init → add → commit → push */
-    fun startPushWizard(repoId: String) {
-        _wizardStep.value = PushWizardStep.SelectRemote(repoId)
-    }
-
-    fun executePush(repoId: String, remoteUrl: String, commitMsg: String, branch: String) =
-        viewModelScope.launch {
-            val repo = _state.value.repos.find { it.id == repoId } ?: return@launch
-            val log = mutableListOf<String>()
-            _wizardStep.value = PushWizardStep.Running(repoId, log.toList())
-
-            fun emit(msg: String) {
-                log.add(msg)
-                _wizardStep.value = PushWizardStep.Running(repoId, log.toList())
-            }
-
-            try {
-                // 1. git init（若未初始化）
-                if (repo.status == LocalRepoStatus.PENDING_INIT) {
-                    emit("→ git init...")
-                    val r = GitRunner.init(repo.path)
-                    if (!r.success) throw RuntimeException("init 失败: ${r.error}")
-                    emit("✓ init 完成")
-                }
-
-                // 2. git remote add / set-url
-                emit("→ 设置远程地址...")
-                val existingRemote = GitRunner.remoteUrl(repo.path)
-                if (existingRemote != null) {
-                    GitRunner.run(repo.path, "remote", "set-url", "origin", remoteUrl)
-                } else {
-                    GitRunner.run(repo.path, "remote", "add", "origin", remoteUrl)
-                }
-                emit("✓ remote: $remoteUrl")
-
-                // 3. git add .
-                emit("→ git add ...")
-                val addR = GitRunner.addAll(repo.path)
-                if (!addR.success) throw RuntimeException("add 失败: ${addR.error}")
-                emit("✓ 已暂存所有文件")
-
-                // 4. git commit
-                emit("→ git commit...")
-                val commitR = GitRunner.commit(repo.path, commitMsg)
-                if (!commitR.success && !commitR.error.contains("nothing to commit")) {
-                    throw RuntimeException("commit 失败: ${commitR.error}")
-                }
-                emit("✓ commit: $commitMsg")
-
-                // 5. git push
-                emit("→ git push -u origin $branch ...")
-                val pushR = GitRunner.push(repo.path, remoteUrl, branch, token)
-                if (!pushR.success) throw RuntimeException("push 失败: ${pushR.error}")
-                emit("✓ 推送成功！")
-
-                // 更新本地仓库状态
-                storage.update(repoId) {
-                    it.copy(status = LocalRepoStatus.GIT_INITIALIZED, remoteUrl = remoteUrl,
-                        currentBranch = branch, error = null)
-                }
-                _wizardStep.value = PushWizardStep.Done(true, log.toList())
-
-            } catch (e: Exception) {
-                emit("✗ ${e.message}")
-                _wizardStep.value = PushWizardStep.Done(false, log.toList())
-            }
-        }
-
-    /** 拉取 */
-    fun pull(repoId: String) = viewModelScope.launch {
-        val repo = _state.value.repos.find { it.id == repoId } ?: return@launch
-        storage.update(repoId) { it.copy(status = LocalRepoStatus.WORKING) }
-        val result = GitRunner.pull(repo.path, token, repo.currentBranch ?: "HEAD")
-        storage.update(repoId) {
-            it.copy(
-                status = if (result.success) LocalRepoStatus.GIT_INITIALIZED else LocalRepoStatus.ERROR,
-                error = if (!result.success) result.error else null,
-            )
-        }
-        toast(if (result.success) "拉取成功" else "拉取失败：${result.error.take(80)}")
-    }
-
     /** 克隆远程仓库到选定目录 */
     fun cloneRepo(url: String, targetDir: String) = viewModelScope.launch {
         toast("克隆中…")
@@ -207,7 +114,6 @@ class LocalRepoViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             toast("克隆失败：${result.error.take(100)}")
         }
-        _state.update { it.copy(showClonePicker = false, pendingCloneUrl = "") }
     }
 
     fun scanRepo(repoId: String) = viewModelScope.launch {
@@ -217,12 +123,14 @@ class LocalRepoViewModel(app: Application) : AndroidViewModel(app) {
         val branch    = if (isGit) GitRunner.currentBranch(repo.path) else null
         val lastMsg   = if (isGit) GitRunner.lastCommitMsg(repo.path) else null
         val remoteUrl = if (isGit) GitRunner.remoteUrl(repo.path) else null
+        val changedFilesCount = if (isGit) GitRunner.getChangedFilesCount(repo.path) else null
         storage.update(repoId) {
             it.copy(
                 status        = if (isGit) LocalRepoStatus.GIT_INITIALIZED else LocalRepoStatus.PENDING_INIT,
                 currentBranch = branch,
                 lastCommit    = lastMsg,
                 remoteUrl     = remoteUrl,
+                changedFilesCount = changedFilesCount,
             )
         }
     }
@@ -260,7 +168,6 @@ class LocalRepoViewModel(app: Application) : AndroidViewModel(app) {
             toast("reset 异常：${e.message}")
         }
     }
-    fun dismissWizard() { _wizardStep.value = PushWizardStep.None }
     fun clearToast() = _state.update { it.copy(toast = null) }
 
     fun addBookmark(bm: BookmarkPath) = viewModelScope.launch {

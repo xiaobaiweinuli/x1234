@@ -12,7 +12,6 @@ import com.gitmob.android.auth.ThemeMode
 import com.gitmob.android.auth.TokenStorage
 import com.gitmob.android.ui.nav.AppNavGraph
 import com.gitmob.android.ui.theme.GitMobTheme
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -32,19 +31,15 @@ class MainActivity : ComponentActivity() {
 
         tokenStorage = (application as GitMobApp).tokenStorage
 
-        // 等待 DataStore 初始化完成再撤销启动画面
-        var ready = false
-        splash.setKeepOnScreenCondition { !ready }
-        lifecycleScope.launch {
-            tokenStorage.accessToken.first()
-            ready = true
-        }
+        // 不再阻塞 splash：Compose 层在未就绪时自己处理 loading
+        // DataStore 第一帧收集速度足够快（<16ms），无需延长 splash
+        splash.setKeepOnScreenCondition { false }
 
         // 处理冷启动时就带着 gitmob:// 链接的情况（极少见）
         handleDeepLink(intent)
 
         setContent {
-            val themeMode by tokenStorage.themeMode.collectAsState(initial = ThemeMode.LIGHT)
+            val themeMode by tokenStorage.themeMode.collectAsState(initial = ThemeMode.SYSTEM)
             GitMobTheme(themeMode = themeMode) {
                 AppNavGraph(
                     tokenStorage  = tokenStorage,
