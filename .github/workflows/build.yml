@@ -1,0 +1,141 @@
+name: Build & Release APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: "版本号 (如 1.2.0)"
+        required: false
+        default: ""
+      release_type:
+        description: "发布类型"
+        required: true
+        default: "debug"
+        type: choice
+        options:
+          - debug
+          - release
+  push:
+    tags:
+      - "v*.*.*"
+
+env:
+  JAVA_VERSION: "17"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  build:
+    name: Build APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # ── 1. Checkout ──
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ── 2. Java ──
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: "temurin"
+          cache: gradle
+
+      # ── 3. Gradle 缓存 ──
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', '**/libs.versions.toml') }}
+          restore-keys: gradle-
+
+      # ── 4. 计算版本号 ──
+      - name: Get version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version_name }}" ]; then
+            echo "name=${{ github.event.inputs.version_name }}" >> $GITHUB_OUTPUT
+          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "name=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          else
+            echo "name=debug-$(date +%Y%m%d-%H%M)" >> $GITHUB_OUTPUT
+          fi
+
+      # ── 5. 权限 ──
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      # ── 6a. Debug 构建（OAuth 凭据通过环境变量注入 BuildConfig）──
+      - name: Build Debug APK
+        if: ${{ github.event.inputs.release_type == 'debug' || !startsWith(github.ref, 'refs/tags/') }}
+        env:
+          OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID }}
+          OAUTH_CALLBACK_URL: ${{ secrets.OAUTH_CALLBACK_URL }}
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      # ── 6b. Release 构建（需要签名）──
+      - name: Decode Keystore
+        if: ${{ github.event.inputs.release_type == 'release' || startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > /tmp/gitmob.keystore
+
+      - name: Build Release APK
+        if: ${{ github.event.inputs.release_type == 'release' || startsWith(github.ref, 'refs/tags/') }}
+        env:
+          OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID }}
+          OAUTH_CALLBACK_URL: ${{ secrets.OAUTH_CALLBACK_URL }}
+          KEYSTORE_PATH: /tmp/gitmob.keystore
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
+
+      # ── 7. 上传 Artifact ──
+      - name: Upload Debug APK
+        if: ${{ github.event.inputs.release_type == 'debug' || !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: GitMob-debug-${{ steps.version.outputs.name }}
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 14
+
+      - name: Upload Release APK
+        if: ${{ github.event.inputs.release_type == 'release' || startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: GitMob-release-${{ steps.version.outputs.name }}
+          path: app/build/outputs/apk/release/*.apk
+          retention-days: 90
+
+      # ── 8. 自动发布 GitHub Release ──
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.release_type == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          # 【关键修改】：明确指定 Tag 名称
+          # 如果是推送 tag 触发，它会使用该 tag；
+          # 如果是手动触发，它会使用我们在第 4 步计算出的 version 名称
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', steps.version.outputs.name) }}
+          name: GitMob v${{ steps.version.outputs.name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          # 确保指向正确的 release 路径
+          files: app/build/outputs/apk/release/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+
+      # ── 9. 清理 keystore ──
+      - name: Clean keystore
+        if: always()
+        run: rm -f /tmp/gitmob.keystore
