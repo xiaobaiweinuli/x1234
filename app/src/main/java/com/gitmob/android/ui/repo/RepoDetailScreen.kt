@@ -1,0 +1,1034 @@
+@file:OptIn(ExperimentalMaterial3Api::class)
+
+package com.gitmob.android.ui.repo
+
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.border
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import com.gitmob.android.api.*
+import com.gitmob.android.ui.common.*
+import com.gitmob.android.ui.theme.*
+import com.gitmob.android.util.LogManager
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.RestartAlt
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import java.time.OffsetDateTime
+import java.time.format.DateTimeFormatter
+import androidx.compose.ui.draw.clip
+import dev.jeziellago.compose.markdowntext.MarkdownText
+import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Article
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.NotificationsNone
+import androidx.compose.material.icons.filled.NotificationsOff
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.runtime.snapshots.SnapshotStateMap
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.material.icons.filled.Undo
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.foundation.layout.defaultMinSize
+import okhttp3.Request
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun RepoDetailScreen(
+    owner: String,
+    repoName: String,
+    tabStepBackEnabled: Boolean,
+    onBack: () -> Unit,
+    onFileClick: (String, String, String, String) -> Unit,
+    onIssueClick: (Int) -> Unit = {},
+    vm: RepoDetailViewModel = viewModel(factory = RepoDetailViewModel.factory(owner, repoName)),
+) {
+    val c = LocalGmColors.current
+    val state by vm.state.collectAsState()
+    val tabs = listOf("文件", "提交", "分支", "操作", "发行版", "PR", "Issues")
+    var showBranchDialog by remember { mutableStateOf(false) }
+    var showNewBranchDialog by remember { mutableStateOf(false) }
+    var showSettingsMenu by remember { mutableStateOf(false) }
+    var showRenameDialog by remember { mutableStateOf(false) }
+    var showEditDialog by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    var showVisibilityDialog by remember { mutableStateOf(false) }
+    var showTransferDialog by remember { mutableStateOf(false) }
+    var showCreateFileDialog by remember { mutableStateOf(false) }
+    var showWatchSheet by remember { mutableStateOf(false) }
+    var newFileName by remember { mutableStateOf("") }
+    var newFileContent by remember { mutableStateOf("") }
+    var showCommitMessageDialog by remember { mutableStateOf(false) }
+    var commitMessage by remember { mutableStateOf("") }
+    var selectedFileForMenu by remember { mutableStateOf<GHContent?>(null) }
+    
+    var showRenameFileDialog by remember { mutableStateOf(false) }
+    var showDeleteFileDialog by remember { mutableStateOf(false) }
+    var renameFileNewName by remember { mutableStateOf("") }
+    val context = LocalContext.current
+
+    state.toast?.let { msg ->
+        LaunchedEffect(msg) { kotlinx.coroutines.delay(2500); vm.clearToast() }
+    }
+
+    /**
+     * 左上角返回按钮：行为固定，无论是否开启逐级返回：
+     *   1. 设置菜单打开 → 关闭菜单
+     *   2. 在文件子目录 → 退回上一级目录
+     *   3. 其他情况    → 直接返回上一页（Remote Tab）
+     */
+    val handleTopBarBack by rememberUpdatedState(newValue = {
+        when {
+            showSettingsMenu               -> showSettingsMenu = false
+            state.currentPath.isNotEmpty() -> vm.navigateUp()
+            else                           -> onBack()
+        }
+    })
+
+    /**
+     * 系统返回手势 / 实体返回键：
+     *   tabStepBackEnabled=false：非文件Tab先跳回文件Tab，文件Tab退目录或返回
+     *   tabStepBackEnabled=true ：逐级退 Tab（tab-1），Tab=0 时退目录或返回
+     */
+    val handleBackPress by rememberUpdatedState(newValue = {
+        when {
+            showSettingsMenu -> {
+                showSettingsMenu = false
+            }
+            tabStepBackEnabled -> {
+                when {
+                    state.tab > 0 -> {
+                        vm.setTab(state.tab - 1)
+                    }
+                    state.currentPath.isNotEmpty() -> {
+                        vm.navigateUp()
+                    }
+                    else -> {
+                        onBack()
+                    }
+                }
+            }
+            else -> {
+                when {
+                    state.tab != 0 -> {
+                        vm.setTab(0)
+                    }
+                    state.currentPath.isNotEmpty() -> {
+                        vm.navigateUp()
+                    }
+                    else -> {
+                        onBack()
+                    }
+                }
+            }
+        }
+    })
+
+    BackHandler(enabled = true) {
+        handleBackPress()
+    }
+
+    Scaffold(
+        containerColor = c.bgDeep,
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text(vm.repoName, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = c.textPrimary)
+                        Text(vm.owner, fontSize = 12.sp, color = c.textTertiary)
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = handleTopBarBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = c.textSecondary) }
+                },
+                actions = {
+                    IconButton(onClick = vm::toggleStar) {
+                        Icon(
+                            if (state.isStarred) Icons.Default.Star else Icons.Default.StarBorder,
+                            null, tint = if (state.isStarred) Yellow else c.textSecondary,
+                        )
+                    }
+                    IconButton(onClick = { vm.loadAll(forceRefresh = true) }) {
+                        Icon(Icons.Default.Refresh, null, tint = c.textSecondary)
+                    }
+                    Box {
+                        IconButton(onClick = { showSettingsMenu = true }) {
+                            Icon(Icons.Default.Settings, null, tint = c.textSecondary)
+                        }
+                        DropdownMenu(
+                            expanded = showSettingsMenu,
+                            onDismissRequest = { showSettingsMenu = false },
+                            modifier = Modifier.background(c.bgCard),
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("重命名", fontSize = 14.sp, color = c.textPrimary) },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.DriveFileRenameOutline,
+                                        null,
+                                        tint = c.textSecondary,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                },
+                                onClick = {
+                                    showSettingsMenu = false
+                                    showRenameDialog = true
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("编辑信息", fontSize = 14.sp, color = c.textPrimary) },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Edit,
+                                        null,
+                                        tint = c.textSecondary,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                },
+                                onClick = {
+                                    showSettingsMenu = false
+                                    showEditDialog = true
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("分享", fontSize = 14.sp, color = c.textPrimary) },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Share,
+                                        null,
+                                        tint = c.textSecondary,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                },
+                                onClick = {
+                                    showSettingsMenu = false
+                                    state.repo?.let { repo ->
+                                        val intent = Intent(Intent.ACTION_SEND).apply {
+                                            type = "text/plain"
+                                            putExtra(Intent.EXTRA_SUBJECT, repo.fullName)
+                                            putExtra(Intent.EXTRA_TEXT, repo.htmlUrl)
+                                        }
+                                        context.startActivity(
+                                            Intent.createChooser(intent, "分享仓库"),
+                                        )
+                                    }
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        if (state.repo?.private == true) "设为公开" else "设为私有",
+                                        fontSize = 14.sp,
+                                        color = c.textPrimary,
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Lock,
+                                        null,
+                                        tint = c.textSecondary,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                },
+                                onClick = {
+                                    showSettingsMenu = false
+                                    showVisibilityDialog = true
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("转移", fontSize = 14.sp, color = c.textPrimary) },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.AccountCircle,
+                                        null,
+                                        tint = c.textSecondary,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                },
+                                onClick = {
+                                    showSettingsMenu = false
+                                    showTransferDialog = true
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("订阅通知", fontSize = 14.sp, color = c.textPrimary) },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Notifications, null,
+                                        tint = c.textSecondary, modifier = Modifier.size(16.dp))
+                                },
+                                onClick = {
+                                    showSettingsMenu = false
+                                    vm.loadSubscription()
+                                    showWatchSheet = true
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("删除", fontSize = 14.sp, color = RedColor) },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        null,
+                                        tint = RedColor,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                },
+                                onClick = {
+                                    showSettingsMenu = false
+                                    showDeleteDialog = true
+                                },
+                            )
+                        }
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = c.bgDeep),
+            )
+        },
+        snackbarHost = {
+            state.toast?.let {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+                    Snackbar(modifier = Modifier.padding(16.dp), containerColor = c.bgCard, contentColor = c.textPrimary) {
+                        Text(it)
+                    }
+                }
+            }
+        },
+    ) { padding ->
+        if (state.loading) { LoadingBox(Modifier.padding(padding)); return@Scaffold }
+        if (state.error != null && state.repo == null) { ErrorBox(state.error!!, vm::loadAll); return@Scaffold }
+        val repo = state.repo ?: return@Scaffold
+
+        Column(Modifier.padding(padding).fillMaxSize()) {
+            // 仓库信息卡
+            Column(
+                modifier = Modifier.fillMaxWidth().background(c.bgCard)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+            ) {
+                if (!repo.description.isNullOrBlank()) {
+                    Text(repo.description, fontSize = 13.sp, color = c.textSecondary, lineHeight = 20.sp)
+                    Spacer(Modifier.height(10.dp))
+                }
+                if (!repo.homepage.isNullOrBlank()) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Icon(Icons.Default.Link, null, tint = BlueColor, modifier = Modifier.size(14.dp))
+                        Text(repo.homepage, fontSize = 12.sp, color = BlueColor)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    StatItem(Icons.Default.Star, "${repo.stars}", Yellow)
+                    StatItem(Icons.Default.Share, "${repo.forks}", c.textSecondary)
+                    StatItem(Icons.Default.Warning, "${repo.openIssues}", RedColor)
+                    Spacer(Modifier.weight(1f))
+                    if (!repo.language.isNullOrBlank()) {
+                        Text(repo.language, fontSize = 11.sp, color = c.textTertiary,
+                            modifier = Modifier.background(c.bgItem, RoundedCornerShape(20.dp))
+                                .padding(horizontal = 8.dp, vertical = 3.dp))
+                    }
+                    if (repo.private) GmBadge("私有", RedDim, RedColor)
+                }
+            }
+
+            // 分支选择器
+            Row(
+                modifier = Modifier.fillMaxWidth().background(c.bgDeep)
+                    .clickable { showBranchDialog = true }
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Icon(Icons.Default.AccountTree, null, tint = BlueColor, modifier = Modifier.size(15.dp))
+                Text(state.currentBranch, fontSize = 13.sp, color = BlueColor,
+                    fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Medium,
+                    modifier = Modifier.weight(1f))
+                Text("${state.branches.size} 个分支", fontSize = 11.sp, color = c.textTertiary)
+                Icon(Icons.Default.ExpandMore, null, tint = c.textTertiary, modifier = Modifier.size(16.dp))
+            }
+
+            // Tabs
+            ScrollableTabRow(
+                selectedTabIndex = state.tab, containerColor = c.bgDeep,
+                contentColor = Coral, edgePadding = 16.dp,
+                divider = { GmDivider() },
+            ) {
+                tabs.forEachIndexed { i, label ->
+                    Tab(
+                        selected = state.tab == i, onClick = { vm.setTab(i) },
+                        text = { Text(label, fontSize = 13.sp) },
+                        selectedContentColor = Coral, unselectedContentColor = c.textSecondary,
+                    )
+                }
+            }
+
+            when (state.tab) {
+                0 -> FilesTab(state, c,
+                    onDirClick = { vm.loadContents(it) },
+                    onFileClick = { path -> onFileClick(owner, repoName, path, state.currentBranch) },
+                    onNavigateUp = vm::navigateUp,
+                    onRefresh = { vm.loadContents(state.currentPath, forceRefresh = true) },
+                    onShare = {
+                        val url = "https://github.com/$owner/$repoName/blob/${state.currentBranch}/${state.currentPath}"
+                        val intent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, url)
+                        }
+                        context.startActivity(Intent.createChooser(intent, "分享"))
+                    },
+                    onAddFile = {
+                        newFileName = ""
+                        newFileContent = ""
+                        showCreateFileDialog = true
+                    },
+                    onHistory = {
+                        vm.setTab(1)
+                    },
+                    onFileRename = { content ->
+                        selectedFileForMenu = content
+                        renameFileNewName = content.name
+                        showRenameFileDialog = true
+                    },
+                    onFileDelete = { content ->
+                        selectedFileForMenu = content
+                        showDeleteFileDialog = true
+                    },
+                    onFileShare = { content ->
+                        val url = "https://github.com/$owner/$repoName/blob/${state.currentBranch}/${content.path}"
+                        val intent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, url)
+                        }
+                        context.startActivity(Intent.createChooser(intent, "分享"))
+                    },
+                    onFileHistory = { content ->
+                        val url = "https://github.com/$owner/$repoName/commits/${state.currentBranch}/${content.path}"
+                        val intent = Intent(
+                            Intent.ACTION_VIEW,
+                            Uri.parse(url)
+                        )
+                        context.startActivity(intent)
+                    },
+                )
+                1 -> CommitsTab(state, c, onCommitClick = { vm.loadCommitDetail(it.sha) },
+                    onRefresh = { vm.loadCommits(forceRefresh = true) })
+                2 -> BranchesTab(state, c, onSwitch = vm::switchBranch,
+                    onNewBranch = { showNewBranchDialog = true },
+                    onDelete = vm::deleteBranch, onRename = vm::renameBranch,
+                    onSetDefault = vm::setDefaultBranch,
+                    onRefresh = vm::refreshBranches)
+                3 -> ActionsTab(state, c, vm, owner, repoName,
+                    onRefresh = vm::refreshActions)
+                4 -> ReleasesTab(state, vm = vm, c = c,
+                    onRefresh = vm::refreshReleases)
+                5 -> PRTab(state, c,
+                    onRefresh = vm::refreshPRs)
+                6 -> IssuesTab(state, c, vm,
+                    onRefresh = vm::refreshIssues,
+                    onIssueClick = onIssueClick)
+            }
+        }
+    }
+
+    if (showBranchDialog) {
+        BranchPickerDialog(
+            branches = state.branches, current = state.currentBranch, c = c,
+            onSelect = { vm.switchBranch(it); showBranchDialog = false },
+            onDismiss = { showBranchDialog = false },
+        )
+    }
+    if (showNewBranchDialog) {
+        NewBranchDialog(c = c,
+            onConfirm = { vm.createBranch(it); showNewBranchDialog = false },
+            onDismiss = { showNewBranchDialog = false },
+        )
+    }
+    val repoForDialogs = state.repo
+    if (showRenameDialog && repoForDialogs != null) {
+        RepoRenameDialog(
+            currentName = repoForDialogs.name,
+            owner = repoForDialogs.owner.login,
+            c = c,
+            onConfirm = { newName ->
+                vm.renameRepo(newName) { onBack() }
+                showRenameDialog = false
+            },
+            onDismiss = { showRenameDialog = false },
+        )
+    }
+    if (showEditDialog && repoForDialogs != null) {
+        RepoEditDialog(
+            repo = repoForDialogs,
+            c = c,
+            onConfirm = { desc, site, topics ->
+                vm.editRepo(desc, site, topics)
+                showEditDialog = false
+            },
+            onDismiss = { showEditDialog = false },
+        )
+    }
+    if (showDeleteDialog && repoForDialogs != null) {
+        RepoDeleteDialog(
+            repoName = repoForDialogs.name,
+            owner = repoForDialogs.owner.login,
+            c = c,
+            onConfirm = {
+                vm.deleteRepo { onBack() }
+                showDeleteDialog = false
+            },
+            onDismiss = { showDeleteDialog = false },
+        )
+    }
+    if (showVisibilityDialog && repoForDialogs != null) {
+        RepoVisibilityDialog(
+            repo = repoForDialogs,
+            c = c,
+            onConfirm = { makePrivate ->
+                vm.updateVisibility(makePrivate)
+                showVisibilityDialog = false
+            },
+            onDismiss = { showVisibilityDialog = false },
+        )
+    }
+    if (showTransferDialog) {
+        RepoTransferDialog(
+            owner = vm.owner,
+            repoName = vm.repoName,
+            userLogin = state.userLogin,
+            userAvatar = state.userAvatar,
+            orgs = state.userOrgs,
+            c = c,
+            onConfirm = { target, newName ->
+                vm.transferRepo(target, newName) { onBack() }
+                showTransferDialog = false
+            },
+            onDismiss = { showTransferDialog = false },
+        )
+    }
+
+    if (showCreateFileDialog) {
+        CreateFileDialog(
+            currentPath = state.currentPath,
+            c = c,
+            onConfirm = { fileName, content ->
+                showCreateFileDialog = false
+                newFileName = fileName
+                newFileContent = content
+                commitMessage = "Create $fileName"
+                showCommitMessageDialog = true
+            },
+            onDismiss = { showCreateFileDialog = false },
+        )
+    }
+
+    if (showCommitMessageDialog) {
+        CommitMessageDialog(
+            defaultMessage = commitMessage,
+            c = c,
+            onConfirm = { msg ->
+                showCommitMessageDialog = false
+                val fullPath = if (state.currentPath.isNotEmpty()) {
+                    "${state.currentPath}/$newFileName"
+                } else {
+                    newFileName
+                }
+                vm.createOrUpdateFile(
+                    path = fullPath,
+                    message = msg,
+                    content = newFileContent,
+                )
+            },
+            onDismiss = { showCommitMessageDialog = false },
+        )
+    }
+
+    if (showRenameFileDialog && selectedFileForMenu != null) {
+        var newName by remember { mutableStateOf(renameFileNewName) }
+        AlertDialog(
+            onDismissRequest = { showRenameFileDialog = false },
+            containerColor = c.bgCard,
+            title = { Text("重命名文件/文件夹", color = c.textPrimary, fontWeight = FontWeight.SemiBold) },
+            text = {
+                OutlinedTextField(
+                    value = newName,
+                    onValueChange = { newName = it },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("新名称") },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Coral,
+                        unfocusedBorderColor = c.border,
+                        focusedTextColor = c.textPrimary,
+                        unfocusedTextColor = c.textPrimary,
+                        focusedContainerColor = c.bgItem,
+                        unfocusedContainerColor = c.bgItem,
+                        focusedLabelColor = Coral,
+                        unfocusedLabelColor = c.textTertiary,
+                    ),
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (newName.isNotBlank() && newName != selectedFileForMenu!!.name) {
+                            showRenameFileDialog = false
+                            commitMessage = "Rename ${selectedFileForMenu!!.name} to $newName"
+                            val oldPath = selectedFileForMenu!!.path
+                            val newPath = oldPath.replaceAfterLast("/", newName)
+                            
+                            vm.renameFile(
+                                oldPath = oldPath,
+                                newPath = newPath,
+                                message = commitMessage,
+                            )
+                        }
+                    },
+                    enabled = newName.isNotBlank() && newName != selectedFileForMenu!!.name,
+                    colors = ButtonDefaults.buttonColors(containerColor = Coral),
+                ) {
+                    Text("重命名")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRenameFileDialog = false }) {
+                    Text("取消", color = c.textSecondary)
+                }
+            },
+        )
+    }
+
+    if (showDeleteFileDialog && selectedFileForMenu != null) {
+        AlertDialog(
+            onDismissRequest = { showDeleteFileDialog = false },
+            containerColor = c.bgCard,
+            icon = {
+                Icon(Icons.Default.Delete, null, tint = RedColor, modifier = Modifier.size(28.dp))
+            },
+            title = { Text("确认删除", color = c.textPrimary, fontWeight = FontWeight.SemiBold) },
+            text = {
+                Text("确定要删除 \"${selectedFileForMenu!!.name}\" 吗？此操作无法撤销。", fontSize = 13.sp, color = c.textSecondary)
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showDeleteFileDialog = false
+                        commitMessage = "Delete ${selectedFileForMenu!!.name}"
+                        vm.deleteFile(
+                            path = selectedFileForMenu!!.path,
+                            message = commitMessage,
+                            sha = selectedFileForMenu!!.sha,
+                        )
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = RedColor),
+                ) {
+                    Text("删除")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteFileDialog = false }) {
+                    Text("取消", color = c.textSecondary)
+                }
+            },
+        )
+    }
+    // 订阅设置 Sheet
+    if (showWatchSheet) {
+        WatchSheet(state = state, vm = vm, onDismiss = { showWatchSheet = false })
+    }
+    // Commit 详情 Modal
+    state.selectedCommit?.let { commit ->
+        CommitDetailSheet(commit = commit, c = c, vm = vm, onDismiss = vm::clearCommitDetail)
+    }
+}
+
+@Composable
+private fun StatItem(icon: ImageVector, text: String, tint: Color) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+        Icon(icon, null, tint = tint, modifier = Modifier.size(14.dp))
+        Text(text, fontSize = 12.sp, color = LocalGmColors.current.textTertiary)
+    }
+}
+
+// ─── Tabs ────────────────────────────────────────────────────────
+
+/**
+ * 文件标签页组件
+ * 
+ * @param state 仓库详情状态
+ * @param c 颜色主题
+ * @param onDirClick 目录点击回调
+ * @param onFileClick 文件点击回调
+ * @param onNavigateUp 返回上一级目录回调
+ * @param onRefresh 刷新回调
+ */
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+fun FilesTab(
+    state: RepoDetailState,
+    c: GmColors,
+    onDirClick: (String) -> Unit,
+    onFileClick: (String) -> Unit,
+    onNavigateUp: () -> Unit,
+    onRefresh: () -> Unit = {},
+    onShare: () -> Unit = {},
+    onAddFile: () -> Unit = {},
+    onHistory: () -> Unit = {},
+    onFileRename: (GHContent) -> Unit = {},
+    onFileDelete: (GHContent) -> Unit = {},
+    onFileShare: (GHContent) -> Unit = {},
+    onFileHistory: (GHContent) -> Unit = {},
+) {
+    PullToRefreshBox(
+        isRefreshing = state.filesRefreshing,
+        onRefresh = onRefresh,
+    ) {
+        LazyColumn(
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(1.dp),
+        ) {
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth()
+                        .background(c.bgCard, RoundedCornerShape(8.dp))
+                        .let { if (state.currentPath.isNotEmpty()) it.clickable(onClick = onNavigateUp) else it }
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    if (state.currentPath.isNotEmpty()) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null,
+                            tint = c.textTertiary, modifier = Modifier.size(17.dp))
+                        Text("..", fontSize = 13.sp, color = c.textTertiary)
+                    }
+                    Spacer(Modifier.weight(1f))
+                    if (state.currentPath.isNotEmpty()) {
+                        Text(state.currentPath, fontSize = 11.sp,
+                            color = c.textTertiary, fontFamily = FontFamily.Monospace)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        IconButton(
+                            onClick = onShare,
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Share,
+                                contentDescription = "分享",
+                                tint = c.textSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        IconButton(
+                            onClick = onAddFile,
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Add,
+                                contentDescription = "添加文件",
+                                tint = c.textSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        IconButton(
+                            onClick = onHistory,
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.History,
+                                contentDescription = "历史记录",
+                                tint = c.textSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+            }
+            // 文件列表加载中：仅在非下拉刷新时显示内联 spinner
+            // （下拉刷新时顶部已有 PullToRefreshBox 的指示器，无需重复显示）
+            if (state.contentsLoading && !state.filesRefreshing) {
+                item {
+                    Box(Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = Coral, modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                    }
+                }
+            } else if (!state.contentsLoading) {
+                items(state.contents, key = { it.path }) { content ->
+                    val isDir = content.type == "dir"
+                    var showMenu by remember { mutableStateOf(false) }
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth()
+                            .background(c.bgCard, RoundedCornerShape(8.dp))
+                            .clickable { if (isDir) onDirClick(content.path) else onFileClick(content.path) }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Icon(
+                            if (isDir) Icons.Default.Folder else Icons.Default.Description,
+                            null,
+                            tint     = if (isDir) Yellow else c.textSecondary,
+                            modifier = Modifier.size(17.dp),
+                        )
+                        Text(content.name, fontSize = 13.sp, color = c.textPrimary,
+                            modifier = Modifier.weight(1f))
+                        if (!isDir) Text(formatSize(content.size), fontSize = 11.sp, color = c.textTertiary)
+                        
+                        Box {
+                            IconButton(
+                                onClick = { showMenu = true },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.MoreVert,
+                                    contentDescription = "更多",
+                                    tint = c.textTertiary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = showMenu,
+                                onDismissRequest = { showMenu = false },
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("重命名", fontSize = 13.sp, color = c.textPrimary) },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Default.DriveFileRenameOutline,
+                                            null,
+                                            tint = c.textSecondary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    },
+                                    onClick = {
+                                        showMenu = false
+                                        onFileRename(content)
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("删除", fontSize = 13.sp, color = RedColor) },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Default.Delete,
+                                            null,
+                                            tint = RedColor,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    },
+                                    onClick = {
+                                        showMenu = false
+                                        onFileDelete(content)
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("分享", fontSize = 13.sp, color = c.textPrimary) },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Default.Share,
+                                            null,
+                                            tint = c.textSecondary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    },
+                                    onClick = {
+                                        showMenu = false
+                                        onFileShare(content)
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("历史记录", fontSize = 13.sp, color = c.textPrimary) },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Default.History,
+                                            null,
+                                            tint = c.textSecondary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    },
+                                    onClick = {
+                                        showMenu = false
+                                        onFileHistory(content)
+                                    },
+                                )
+                            }
+                        }
+                        
+                        if (isDir) Icon(Icons.AutoMirrored.Filled.ArrowForward, null,
+                            tint = c.textTertiary, modifier = Modifier.size(14.dp))
+                    }
+                }
+            }
+            // README 区域：仅在根目录 且 文件列表已加载完成时显示，避免双 loading
+            if (state.currentPath.isEmpty() && !state.contentsLoading && !state.filesRefreshing) {
+                item {
+                    Spacer(Modifier.height(16.dp))
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(c.bgCard, RoundedCornerShape(8.dp))
+                            .padding(16.dp)
+                    ) {
+                        Text("README", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = c.textPrimary)
+                        Spacer(Modifier.height(8.dp))
+                        GmDivider()
+                        Spacer(Modifier.height(8.dp))
+                        when {
+                            state.readmeLoading -> {
+                                // 骨架占位条，不再使用独立 CircularProgressIndicator
+                                repeat(3) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth(if (it == 2) 0.6f else 1f)
+                                            .height(14.dp)
+                                            .padding(bottom = 2.dp)
+                                            .background(c.border, RoundedCornerShape(4.dp))
+                                    )
+                                    Spacer(Modifier.height(8.dp))
+                                }
+                            }
+                            state.readmeContent != null -> {
+                                MarkdownText(
+                                    markdown = state.readmeContent!!,
+                                    style = androidx.compose.ui.text.TextStyle(color = c.textPrimary),
+                                )
+                            }
+                            else -> {
+                                Text("暂无 README 文件", fontSize = 13.sp, color = c.textTertiary)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+    }
+}
+
+/**
+ * 提交记录标签页组件
+ * 
+ * @param state 仓库详情状态
+ * @param c 颜色主题
+ * @param onCommitClick 提交点击回调
+ * @param onRefresh 刷新回调
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PRTab(
+    state: RepoDetailState, 
+    c: GmColors,
+    onRefresh: () -> Unit = {},
+) {
+    val prs = state.prs
+    PullToRefreshBox(
+        isRefreshing = state.prsRefreshing,
+        onRefresh = onRefresh,
+    ) {
+        if (prs.isEmpty()) {
+            EmptyBox("暂无 Pull Request")
+        } else {
+            LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(prs, key = { it.number }) { pr ->
+                    Column(Modifier.fillMaxWidth().background(c.bgCard, RoundedCornerShape(12.dp)).padding(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            GmBadge("#${pr.number}", GreenDim, Green)
+                            Text(pr.title, fontSize = 13.sp, color = c.textPrimary, modifier = Modifier.weight(1f))
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(pr.head.ref, fontSize = 11.sp, color = BlueColor, fontFamily = FontFamily.Monospace,
+                                modifier = Modifier.background(BlueDim, RoundedCornerShape(4.dp)).padding(horizontal = 5.dp))
+                            Text("→", fontSize = 11.sp, color = c.textTertiary)
+                            Text(pr.base.ref, fontSize = 11.sp, color = c.textSecondary, fontFamily = FontFamily.Monospace)
+                            Spacer(Modifier.weight(1f))
+                            Text(pr.user.login, fontSize = 11.sp, color = c.textTertiary)
+                        }
+                    }
+                }
+            }
+        }
+
+    }
+}
+
+/**
+ * Issues标签页组件
+ * 
+ * @param state 仓库详情状态
+ * @param c 颜色主题
+ * @param vm 仓库详情ViewModel
+ * @param onRefresh 刷新回调
+ */
+internal fun formatSize(bytes: Long): String = when {
+    bytes < 1024L        -> "${bytes}B"
+    bytes < 1024L * 1024 -> "${bytes / 1024}KB"
+    bytes < 1024L * 1024 * 1024 -> "${bytes / 1024 / 1024}MB"
+    else -> "${bytes / 1024 / 1024 / 1024}GB"
+}
+
+private val dateFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+
+internal fun repoFormatDate(iso: String): String = try {
+    val odt = OffsetDateTime.parse(iso)
+    odt.toLocalDateTime().format(dateFormatter)
+} catch (_: Exception) {
+    iso
+}
+
+internal fun isColorLight(color: Color): Boolean {
+    val luminance = 0.299 * color.red + 0.587 * color.green + 0.114 * color.blue
+    return luminance > 0.5
+}
+
+// ─── 分支相关弹窗 ─────────────────────────────────────────────────────────────
+
