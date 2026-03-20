@@ -88,7 +88,7 @@ import okhttp3.Request
 @Composable
 fun ReleasesTab(
     state: RepoDetailState,
-    vm: RepoDetailViewModel? = null, 
+    vm: RepoDetailViewModel? = null,
     c: GmColors,
     onRefresh: () -> Unit = {},
 ) {
@@ -105,16 +105,246 @@ fun ReleasesTab(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(releases, key = { it.id }) { release ->
-                    ReleaseCard(release = release, c = c, vm = vm)
+                    SwipeableReleaseCard(release = release, c = c, vm = vm)
                 }
             }
         }
-
     }
 }
 
+// ── 左滑删除包装 ──────────────────────────────────────────────────────────────
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ReleaseCard(release: GHRelease, c: GmColors, vm: RepoDetailViewModel? = null) {
+private fun SwipeableReleaseCard(release: GHRelease, c: GmColors, vm: RepoDetailViewModel?) {
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    var showEditDialog   by remember { mutableStateOf(false) }
+    var errorMsg         by remember { mutableStateOf<String?>(null) }
+
+    val dismissState = rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            if (value == SwipeToDismissBoxValue.EndToStart) {
+                showDeleteDialog = true
+            }
+            false   // 不真实 dismiss，仅触发对话框
+        }
+    )
+
+    SwipeToDismissBox(
+        state = dismissState,
+        enableDismissFromStartToEnd = false,
+        backgroundContent = {
+            val color by animateColorAsState(
+                if (dismissState.targetValue == SwipeToDismissBoxValue.EndToStart)
+                    Color(0xFFD32F2F) else c.border,
+                label = "swipe_bg",
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(color, RoundedCornerShape(12.dp)),
+                contentAlignment = Alignment.CenterEnd,
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(end = 20.dp),
+                ) {
+                    Icon(Icons.Default.Delete, null, tint = Color.White, modifier = Modifier.size(22.dp))
+                    Text("删除", fontSize = 11.sp, color = Color.White, modifier = Modifier.padding(top = 3.dp))
+                }
+            }
+        },
+    ) {
+        ReleaseCard(
+            release   = release,
+            c         = c,
+            vm        = vm,
+            onEditClick = { showEditDialog = true },
+        )
+    }
+
+    // ── 删除确认弹窗 ──
+    if (showDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            containerColor   = c.bgCard,
+            icon  = { Icon(Icons.Default.Delete, null, tint = Color(0xFFD32F2F)) },
+            title = { Text("删除发行版？", color = c.textPrimary, fontWeight = FontWeight.SemiBold) },
+            text  = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        "即将删除发行版「${release.name ?: release.tagName}」，此操作不可撤销。",
+                        color = c.textSecondary, fontSize = 13.sp,
+                    )
+                    Text(
+                        "注意：此操作仅删除 Release 记录，不会删除对应的 Git Tag。",
+                        color = c.textTertiary, fontSize = 11.sp,
+                    )
+                    errorMsg?.let {
+                        Text(it, color = Color(0xFFD32F2F), fontSize = 12.sp)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        vm?.deleteRelease(
+                            releaseId = release.id,
+                            onSuccess = { showDeleteDialog = false },
+                            onError   = { errorMsg = it },
+                        )
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F)),
+                ) { Text("确认删除") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDialog = false; errorMsg = null }) {
+                    Text("取消", color = c.textSecondary)
+                }
+            },
+        )
+    }
+
+    // ── 编辑弹窗 ──
+    if (showEditDialog) {
+        EditReleaseDialog(
+            release = release,
+            c       = c,
+            onDismiss = { showEditDialog = false },
+            onConfirm = { tagName, name, body, draft, prerelease ->
+                vm?.updateRelease(
+                    releaseId   = release.id,
+                    tagName     = tagName,
+                    name        = name,
+                    body        = body,
+                    draft       = draft,
+                    prerelease  = prerelease,
+                    onSuccess   = { showEditDialog = false },
+                    onError     = { /* Toast 由 ViewModel 处理 */ },
+                )
+            },
+        )
+    }
+}
+
+// ── 编辑弹窗 ─────────────────────────────────────────────────────────────────
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun EditReleaseDialog(
+    release: GHRelease,
+    c: GmColors,
+    onDismiss: () -> Unit,
+    onConfirm: (tagName: String, name: String, body: String, draft: Boolean, prerelease: Boolean) -> Unit,
+) {
+    var tagName    by remember { mutableStateOf(release.tagName) }
+    var name       by remember { mutableStateOf(release.name ?: "") }
+    var body       by remember { mutableStateOf(release.body ?: "") }
+    var draft      by remember { mutableStateOf(release.draft) }
+    var prerelease by remember { mutableStateOf(release.prerelease) }
+
+    val fieldColors = OutlinedTextFieldDefaults.colors(
+        focusedBorderColor   = Coral,
+        unfocusedBorderColor = c.border,
+        focusedTextColor     = c.textPrimary,
+        unfocusedTextColor   = c.textPrimary,
+        focusedContainerColor   = c.bgItem,
+        unfocusedContainerColor = c.bgItem,
+        focusedLabelColor    = Coral,
+        unfocusedLabelColor  = c.textTertiary,
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor   = c.bgCard,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(Icons.Default.Edit, null, tint = Coral, modifier = Modifier.size(18.dp))
+                Text("编辑发行版", color = c.textPrimary, fontWeight = FontWeight.SemiBold)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                OutlinedTextField(
+                    value = tagName, onValueChange = { tagName = it },
+                    label = { Text("Tag 名称") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth(),
+                    colors = fieldColors,
+                )
+                OutlinedTextField(
+                    value = name, onValueChange = { name = it },
+                    label = { Text("发行版标题") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth(),
+                    colors = fieldColors,
+                )
+                OutlinedTextField(
+                    value = body, onValueChange = { body = it },
+                    label = { Text("发行说明（支持 Markdown）") },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp),
+                    maxLines = 8,
+                    colors = fieldColors,
+                )
+                // 草稿 / 预发布 开关
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .background(c.bgItem, RoundedCornerShape(8.dp))
+                            .clickable { draft = !draft }
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Checkbox(
+                            checked = draft, onCheckedChange = { draft = it },
+                            colors = CheckboxDefaults.colors(checkedColor = Coral),
+                        )
+                        Text("草稿", fontSize = 13.sp, color = c.textPrimary)
+                    }
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .background(c.bgItem, RoundedCornerShape(8.dp))
+                            .clickable { prerelease = !prerelease }
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Checkbox(
+                            checked = prerelease, onCheckedChange = { prerelease = it },
+                            colors = CheckboxDefaults.colors(checkedColor = Coral),
+                        )
+                        Text("预发布", fontSize = 13.sp, color = c.textPrimary)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirm(tagName.trim(), name.trim(), body.trim(), draft, prerelease) },
+                enabled = tagName.isNotBlank(),
+                colors  = ButtonDefaults.buttonColors(containerColor = Coral),
+            ) { Text("保存") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消", color = c.textSecondary)
+            }
+        },
+    )
+}
+
+@Composable
+fun ReleaseCard(
+    release: GHRelease,
+    c: GmColors,
+    vm: RepoDetailViewModel? = null,
+    onEditClick: (() -> Unit)? = null,
+) {
     val context = LocalContext.current
     Column(
         modifier = Modifier
@@ -131,13 +361,25 @@ fun ReleaseCard(release: GHRelease, c: GmColors, vm: RepoDetailViewModel? = null
             }
             Spacer(Modifier.weight(1f))
             Text(release.tagName, fontSize = 12.sp, color = Coral, fontFamily = FontFamily.Monospace)
+            // 编辑按钮（仅传入 vm 时显示）
+            if (vm != null && onEditClick != null) {
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .background(c.bgItem, RoundedCornerShape(6.dp))
+                        .clickable { onEditClick() },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Default.Edit, null, tint = c.textTertiary, modifier = Modifier.size(14.dp))
+                }
+            }
         }
         Spacer(Modifier.height(8.dp))
         Text(release.name ?: release.tagName, fontSize = 14.sp, color = c.textPrimary, fontWeight = FontWeight.Medium)
-        release.body?.let { body ->
+        release.body?.let { bodyText ->
             Spacer(Modifier.height(6.dp))
             Text(
-                body.take(200) + if (body.length > 200) "…" else "",
+                bodyText.take(200) + if (bodyText.length > 200) "…" else "",
                 fontSize = 12.sp,
                 color = c.textSecondary,
                 maxLines = 3
@@ -197,8 +439,7 @@ fun ReleaseCard(release: GHRelease, c: GmColors, vm: RepoDetailViewModel? = null
                             Text(formatSize(asset.size), fontSize = 10.sp, color = c.textTertiary)
                         }
                         if (isDownloading)
-                            Text("$pct%", fontSize = 11.sp, color = Coral,
-                                fontWeight = FontWeight.Medium)
+                            Text("$pct%", fontSize = 11.sp, color = Coral, fontWeight = FontWeight.Medium)
                     }
                 }
             }

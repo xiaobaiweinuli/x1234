@@ -238,6 +238,21 @@ interface GitHubApi {
         @Query("per_page") perPage: Int = 20,
     ): List<GHRelease>
 
+    @PATCH("repos/{owner}/{repo}/releases/{releaseId}")
+    suspend fun updateRelease(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("releaseId") releaseId: Long,
+        @Body body: UpdateReleaseRequest,
+    ): GHRelease
+
+    @DELETE("repos/{owner}/{repo}/releases/{releaseId}")
+    suspend fun deleteRelease(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("releaseId") releaseId: Long,
+    ): retrofit2.Response<Unit>
+
     // ── SSH Keys ──
     @GET("user/keys")
     suspend fun getSSHKeys(): List<GHSSHKey>

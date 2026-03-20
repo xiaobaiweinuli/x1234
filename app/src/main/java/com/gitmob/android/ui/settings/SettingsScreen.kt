@@ -830,7 +830,7 @@ fun AboutDialog(onDismiss: () -> Unit) {
                 AboutLinkRow(
                     icon = Icons.Default.Code,
                     label = "GitHub 仓库",
-                    sub = "xiaobaiweinuli/GitMob-Android · Apache 2.0",
+                    sub = "xiaobaiweinuli/GitMob-Android · AGPL-3.0",
                     url = "https://github.com/xiaobaiweinuli/GitMob-Android",
                     context = context, c = c,
                 )

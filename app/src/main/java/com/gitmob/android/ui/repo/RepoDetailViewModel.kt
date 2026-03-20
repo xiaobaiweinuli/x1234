@@ -533,6 +533,37 @@ class RepoDetailViewModel(app: Application, savedStateHandle: SavedStateHandle) 
         }
     }
 
+    /** 编辑发行版（PATCH /repos/{owner}/{repo}/releases/{releaseId}） */
+    fun updateRelease(
+        releaseId: Long, tagName: String, name: String, body: String,
+        draft: Boolean, prerelease: Boolean,
+        onSuccess: () -> Unit, onError: (String) -> Unit,
+    ) = viewModelScope.launch {
+        try {
+            ApiClient.api.updateRelease(
+                owner, repoName, releaseId,
+                UpdateReleaseRequest(tagName, name, body, draft, prerelease)
+            )
+            refreshReleases()
+            onSuccess()
+        } catch (e: Exception) { onError(e.message ?: "编辑失败") }
+    }
+
+    /** 删除发行版（DELETE /repos/{owner}/{repo}/releases/{releaseId}） */
+    fun deleteRelease(
+        releaseId: Long, onSuccess: () -> Unit, onError: (String) -> Unit,
+    ) = viewModelScope.launch {
+        try {
+            val resp = ApiClient.api.deleteRelease(owner, repoName, releaseId)
+            if (resp.isSuccessful) {
+                _state.update { it.copy(releases = it.releases.filter { r -> r.id != releaseId }) }
+                onSuccess()
+            } else {
+                onError("删除失败 (${resp.code()})")
+            }
+        } catch (e: Exception) { onError(e.message ?: "删除失败") }
+    }
+
     // ─── GitHub Actions ───────────────────────────────────────────────────────
     fun loadWorkflows() = viewModelScope.launch {
         try {

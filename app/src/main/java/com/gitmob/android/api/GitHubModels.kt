@@ -215,6 +215,14 @@ data class GHRelease(
     val assets: List<GHAsset>,
 )
 
+data class UpdateReleaseRequest(
+    @SerializedName("tag_name")   val tagName: String,
+    val name: String,
+    val body: String,
+    val draft: Boolean,
+    val prerelease: Boolean,
+)
+
 data class GHAsset(
     val id: Long = 0,
     val name: String,
