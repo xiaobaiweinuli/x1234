@@ -11,6 +11,10 @@ import com.gitmob.android.auth.TokenStorage
 import com.gitmob.android.data.RepoRepository
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 
 class RepoDetailViewModel(app: Application, savedStateHandle: SavedStateHandle) : AndroidViewModel(app) {
@@ -562,6 +566,109 @@ class RepoDetailViewModel(app: Application, savedStateHandle: SavedStateHandle) 
                 onError("删除失败 (${resp.code()})")
             }
         } catch (e: Exception) { onError(e.message ?: "删除失败") }
+    }
+
+    // ─── 多文件上传（Git Data API，一次 commit）────────────────────────────────
+    /**
+     * 通过 Git Data API 将本地文件列表上传为单个 commit：
+     * 1. GET  git/refs/heads/{branch}   → parentSha
+     * 2. POST git/blobs × N (并发≤5)   → blob SHA 列表
+     * 3. POST git/trees                 → tree SHA
+     * 4. POST git/commits               → commit SHA
+     * 5. PATCH git/refs/heads/{branch}  → 更新 branch
+     *
+     * @param fileEntries  List of Pair(本地绝对路径, 仓库相对路径)
+     * @param commitMessage  commit 信息
+     */
+    fun uploadFiles(
+        fileEntries: List<Pair<String, String>>,  // (localAbsPath, repoRelPath)
+        commitMessage: String,
+        onSuccess: () -> Unit,
+        onError: (String) -> Unit,
+    ) = viewModelScope.launch {
+        val branch = _state.value.currentBranch
+        _state.update {
+            it.copy(
+                uploadPhase       = UploadPhase.BLOBS,
+                uploadBlobProgress = 0,
+                uploadBlobTotal   = fileEntries.size,
+                uploadCurrentFile = "",
+                uploadError       = null,
+            )
+        }
+        try {
+            // ─ Step 1: 获取分支 HEAD SHA ──────────────────────────────────────
+            val parentSha = ApiClient.api.getRef(owner, repoName, branch).obj.sha
+
+            // ─ Step 2: 并发创建 blobs（每批最多 5 个）────────────────────────
+            val blobShas = mutableListOf<String>()
+            val semaphore = kotlinx.coroutines.sync.Semaphore(5)
+            kotlinx.coroutines.coroutineScope {
+                val jobs = fileEntries.mapIndexed { idx, (localPath, repoPath) ->
+                    async {
+                        semaphore.withPermit {
+                            _state.update {
+                                it.copy(
+                                    uploadCurrentFile  = java.io.File(localPath).name,
+                                    uploadBlobProgress = idx,
+                                )
+                            }
+                            val bytes   = java.io.File(localPath).readBytes()
+                            val encoded = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                            val resp    = ApiClient.api.createBlob(owner, repoName, GHCreateBlobRequest(encoded))
+                            resp.sha
+                        }
+                    }
+                }
+                val results = jobs.map { it.await() }
+                blobShas.addAll(results)
+            }
+            _state.update { it.copy(uploadBlobProgress = fileEntries.size) }
+
+            // ─ Step 3: 构建 tree ──────────────────────────────────────────────
+            _state.update { it.copy(uploadPhase = UploadPhase.TREE) }
+            val treeItems = fileEntries.mapIndexed { idx, (_, repoPath) ->
+                GHTreeItem(path = repoPath, sha = blobShas[idx])
+            }
+            val treeResp = ApiClient.api.createTree(
+                owner, repoName,
+                GHCreateTreeRequest(tree = treeItems, baseTree = parentSha)
+            )
+
+            // ─ Step 4: 创建 commit ────────────────────────────────────────────
+            _state.update { it.copy(uploadPhase = UploadPhase.COMMIT) }
+            val commitResp = ApiClient.api.createCommit(
+                owner, repoName,
+                GHCreateCommitRequest(
+                    message = commitMessage,
+                    tree    = treeResp.sha,
+                    parents = listOf(parentSha),
+                )
+            )
+
+            // ─ Step 5: 更新分支 ref ───────────────────────────────────────────
+            _state.update { it.copy(uploadPhase = UploadPhase.REF) }
+            ApiClient.api.updateRef(owner, repoName, branch, GHUpdateRefRequest(sha = commitResp.sha))
+
+            // ─ 完成 ───────────────────────────────────────────────────────────
+            _state.update { it.copy(uploadPhase = UploadPhase.DONE) }
+            loadContents(_state.value.currentPath, forceRefresh = true)
+            onSuccess()
+        } catch (e: Exception) {
+            _state.update { it.copy(uploadPhase = UploadPhase.ERROR, uploadError = e.message ?: "上传失败") }
+            onError(e.message ?: "上传失败")
+        }
+    }
+
+    /** 重置上传状态（关闭进度弹窗后调用） */
+    fun resetUploadState() = _state.update {
+        it.copy(
+            uploadPhase       = UploadPhase.IDLE,
+            uploadBlobProgress = 0,
+            uploadBlobTotal   = 0,
+            uploadCurrentFile = "",
+            uploadError       = null,
+        )
     }
 
     // ─── GitHub Actions ───────────────────────────────────────────────────────

@@ -215,3 +215,7 @@ app/src/main/java/com/gitmob/android/
 └── util/           # 下载管理、崩溃日志、LogManager
 cf-worker/          # Cloudflare Worker（OAuth 安全中转）
 ```
+
+---
+
+GitMob is a Kotlin Jetpack Compose Android GitHub client with OAuth 2.0 via Cloudflare Workers, featuring full remote repo management, JGit-powered local Git operations, stateful file browser, GitHub Actions workflow control, Issues/PR tracking, and automated signed APK builds via GitHub Actions.

@@ -12,8 +12,11 @@ android {
         applicationId = "com.gitmob.android"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        // versionName 由 CI 通过 VERSION_NAME 环境变量注入（tag 触发时 = tag，如 1.2.3）
+        // versionCode 由 CI 通过 VERSION_CODE 环境变量注入（= github.run_number，自动递增）
+        // 本地开发回退默认值
+        versionCode = System.getenv("VERSION_CODE")?.toIntOrNull() ?: 1
+        versionName = System.getenv("VERSION_NAME") ?: "1.0.0"
         // OAuth 凭据：CI 通过环境变量注入，本地开发时回退占位符
         val oauthClientId  = System.getenv("OAUTH_CLIENT_ID")  ?: "YOUR_GITHUB_CLIENT_ID"
         val oauthCallback  = System.getenv("OAUTH_CALLBACK_URL") ?: "YOUR_OAUTH_CALLBACK_URL"

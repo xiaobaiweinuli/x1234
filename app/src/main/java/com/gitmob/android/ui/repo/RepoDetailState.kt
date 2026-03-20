@@ -84,6 +84,12 @@ data class RepoDetailState(
     val issueTemplatesLoading: Boolean = false,
     // 下载任务 ID 表，key = asset.url 或 artifact.id（UI 查询进度用）
     val downloadTaskIds: Map<String, Int> = emptyMap(),
+    // ── 上传状态 ──
+    val uploadPhase: UploadPhase = UploadPhase.IDLE,
+    val uploadBlobProgress: Int = 0,    // 已完成 blob 数
+    val uploadBlobTotal: Int = 0,       // 总 blob 数
+    val uploadCurrentFile: String = "", // 正在处理的文件名
+    val uploadError: String? = null,
 )
 
 /**
@@ -124,4 +130,15 @@ data class GitOpResult(
     val detail: String,       // 成功/失败详情
     val newSha: String? = null,
 )
+
+/** 上传阶段 */
+enum class UploadPhase {
+    IDLE,      // 空闲
+    BLOBS,     // 正在创建 blob
+    TREE,      // 正在构建 tree
+    COMMIT,    // 正在创建 commit
+    REF,       // 正在更新分支 ref
+    DONE,      // 完成
+    ERROR,     // 错误
+}
 

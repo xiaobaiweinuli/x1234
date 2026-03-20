@@ -176,8 +176,10 @@ fun AppNavGraph(
                 },
                 onCreateRepo = { navController.navigate(Route.CreateRepo.path) },
                 localVm      = localVm,
-                onLogout     = {
-                    isReauth = true
+                onLogout     = { forceReauth ->
+                    // forceReauth=true: 取消授权(deleteGrant)后需重新完整授权
+                    // forceReauth=false: 普通退出登录(revokeToken)，grant保留，直接快速重登
+                    isReauth = forceReauth
                     navController.navigate(Route.Login.path) { popUpTo(0) { inclusive = true } }
                 },
                 onSwitchAccount = {
@@ -291,7 +293,7 @@ private fun MainScreen(
     onLocalRepoClick: (String) -> Unit,
     onCreateRepo: () -> Unit,
     localVm: LocalRepoViewModel,
-    onLogout: () -> Unit,
+    onLogout: (forceReauth: Boolean) -> Unit,
     onSwitchAccount: (com.gitmob.android.auth.AccountInfo) -> Unit = {},
     onAddAccount: () -> Unit = {},
 ) {
@@ -360,8 +362,8 @@ private fun MainScreen(
                             settingsScope.launch { tokenStorage.setTabStepBack(enabled) }
                         },
                         onBack   = { /* 底部 tab，无需返回 */ },
-                        onLogout = {
-                            onLogout()
+                        onLogout = { forceReauth ->
+                            onLogout(forceReauth)
                         },
                         onSwitchAccount = { account ->
                             settingsScope.launch {

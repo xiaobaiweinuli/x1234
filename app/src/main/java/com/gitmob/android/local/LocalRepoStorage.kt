@@ -2,7 +2,6 @@ package com.gitmob.android.local
 
 import android.content.Context
 import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
 import com.gitmob.android.auth.TokenStorage
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -14,27 +13,28 @@ class LocalRepoStorage(private val context: Context) {
     private val tokenStorage = TokenStorage(context)
     private val gson = Gson()
 
-    val repos: Flow<List<LocalRepo>> = tokenStorage.localReposJson.map { json ->
-        try {
-            val type = object : TypeToken<List<LocalRepo>>() {}.type
-            gson.fromJson<List<LocalRepo>>(json, type) ?: emptyList()
+    // JsonParser 逐元素解析，完全不依赖泛型签名，debug/release 行为一致
+    private fun parseRepos(json: String?): List<LocalRepo> {
+        if (json.isNullOrBlank()) return emptyList()
+        return try {
+            val array = com.google.gson.JsonParser.parseString(json).asJsonArray
+            array.mapNotNull { element ->
+                try { gson.fromJson(element, LocalRepo::class.java) }
+                catch (_: Exception) { null }
+            }
         } catch (_: Exception) { emptyList() }
+    }
+
+    val repos: Flow<List<LocalRepo>> = tokenStorage.localReposJson.map { json ->
+        parseRepos(json)
     }
 
     private suspend fun save(list: List<LocalRepo>) {
         tokenStorage.saveLocalReposJson(gson.toJson(list))
     }
 
-    /** 修复：用 .first() 而非 collect { return@collect }
-     *  collect 内 return@collect 会抛 AbortFlowException（是 Exception 子类），
-     *  被外层 catch(Exception) 吞掉，永远返回 emptyList()。*/
-    private suspend fun loadNow(): List<LocalRepo> {
-        return try {
-            val json = tokenStorage.localReposJson.first()
-            val type = object : TypeToken<List<LocalRepo>>() {}.type
-            gson.fromJson<List<LocalRepo>>(json, type) ?: emptyList()
-        } catch (_: Exception) { emptyList() }
-    }
+    private suspend fun loadNow(): List<LocalRepo> =
+        parseRepos(tokenStorage.localReposJson.first())
 
     suspend fun addOrUpdate(repo: LocalRepo) {
         val current = loadNow()

@@ -306,12 +306,34 @@ fun FilePickerScreen(
 
     val bgTint = if (isPrivileged && rootEnabled) Color(0xFF1A1000) else c.bgDeep
 
-    // 拦截返回键：有上级目录则返回上级，否则关闭文件选择器
+    // 普通模式的存储根目录（返回到此再按返回才关闭）
+    val storageRoot = remember {
+        android.os.Environment.getExternalStorageDirectory().absolutePath  // /storage/emulated/0
+    }
+
+    // 拦截返回键
     BackHandler {
-        if (currentPath != "/") {
-            loadDir(File(currentPath).parent ?: "/")
-        } else {
-            onDismiss()
+        val parentPath = File(currentPath).parent
+        when {
+            // 已在顶层（根目录或无父目录）→ 关闭
+            parentPath == null || parentPath == currentPath -> onDismiss()
+
+            // root 模式：可以一路返回到根目录 "/"，到根目录后再按才关闭
+            rootEnabled && RootManager.isGranted -> {
+                loadDir(parentPath)
+            }
+
+            // 普通模式：父目录是特权路径（/data /system 等）→ 不可访问，关闭
+            isPrivilegedPath(parentPath) -> onDismiss()
+
+            // 普通模式：当前已在存储根目录 → 关闭
+            currentPath == storageRoot -> onDismiss()
+
+            // 普通模式：父目录可读 → 返回父目录
+            File(parentPath).canRead() -> loadDir(parentPath)
+
+            // 普通模式：父目录不可读（无权限）→ 关闭
+            else -> onDismiss()
         }
     }
 
