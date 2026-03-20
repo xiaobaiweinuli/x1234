@@ -5,7 +5,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.gitmob.android.auth.TokenStorage
 import com.gitmob.android.ui.filepicker.BookmarkPath
-import com.google.gson.reflect.TypeToken
 import com.gitmob.android.local.GitRunner
 import com.gitmob.android.local.LocalRepo
 import com.gitmob.android.local.LocalRepoStatus
@@ -40,11 +39,11 @@ class LocalRepoViewModel(app: Application) : AndroidViewModel(app) {
     private var token: String = ""
 
     // 自定义书签（持久化在 DataStore）
+    // Array<BookmarkPath>::class.java 替代 TypeToken，R8 不裁剪具体类型
     val customBookmarks: kotlinx.coroutines.flow.StateFlow<List<BookmarkPath>> =
         tokenStorage.bookmarksJson.map { json ->
             try {
-                val type = object : TypeToken<List<BookmarkPath>>() {}.type
-                gson.fromJson<List<BookmarkPath>>(json, type) ?: emptyList()
+                gson.fromJson(json, Array<BookmarkPath>::class.java)?.toList() ?: emptyList()
             } catch (_: Exception) { emptyList() }
         }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, emptyList())
 

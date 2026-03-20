@@ -4,7 +4,6 @@ import android.content.Context
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -32,22 +31,33 @@ data class AccountInfo(
  * 与 TokenStorage 协同工作：
  *   TokenStorage 保留单账号字段作为"当前活跃账号"的镜像，供其他组件兼容读取。
  *   AccountStore 管理完整的多账号列表。
+ *
+ * 注意：不使用 TypeToken<List<AccountInfo>>(){}，改用 Array<AccountInfo> 再转 List，
+ *       彻底规避 R8 在 release 包中裁剪泛型签名导致的 IllegalStateException。
  */
 class AccountStore(private val context: Context) {
 
     private val gson = Gson()
-    private val listType = object : TypeToken<List<AccountInfo>>() {}.type
 
     private object Keys {
         val ACCOUNTS_JSON  = stringPreferencesKey("accounts_json")
         val ACTIVE_LOGIN   = stringPreferencesKey("active_login")
     }
 
+    /**
+     * 将 JSON 反序列化为 List<AccountInfo>。
+     * 使用 Array<AccountInfo>::class.java 代替 TypeToken，不依赖泛型签名，R8 安全。
+     */
+    private fun parseAccounts(json: String?): List<AccountInfo> {
+        if (json.isNullOrBlank()) return emptyList()
+        return try {
+            gson.fromJson(json, Array<AccountInfo>::class.java)?.toList() ?: emptyList()
+        } catch (_: Exception) { emptyList() }
+    }
+
     /** 所有已保存账号的流 */
     val accounts: Flow<List<AccountInfo>> = context.dataStore.data.map { prefs ->
-        val json = prefs[Keys.ACCOUNTS_JSON] ?: return@map emptyList()
-        try { gson.fromJson(json, listType) ?: emptyList() }
-        catch (_: Exception) { emptyList() }
+        parseAccounts(prefs[Keys.ACCOUNTS_JSON])
     }
 
     /** 当前活跃账号的 login */
@@ -56,20 +66,13 @@ class AccountStore(private val context: Context) {
     /** 当前活跃账号信息 */
     val activeAccount: Flow<AccountInfo?> = context.dataStore.data.map { prefs ->
         val login = prefs[Keys.ACTIVE_LOGIN] ?: return@map null
-        val json  = prefs[Keys.ACCOUNTS_JSON] ?: return@map null
-        try {
-            val list: List<AccountInfo> = gson.fromJson(json, listType) ?: return@map null
-            list.firstOrNull { it.login == login }
-        } catch (_: Exception) { null }
+        parseAccounts(prefs[Keys.ACCOUNTS_JSON]).firstOrNull { it.login == login }
     }
 
     /** 添加或更新账号（login 相同则覆盖），并设为活跃账号 */
     suspend fun addOrUpdateAccount(info: AccountInfo) {
         context.dataStore.edit { prefs ->
-            val current: List<AccountInfo> = try {
-                gson.fromJson(prefs[Keys.ACCOUNTS_JSON] ?: "[]", listType) ?: emptyList()
-            } catch (_: Exception) { emptyList() }
-
+            val current = parseAccounts(prefs[Keys.ACCOUNTS_JSON])
             val updated = current.filter { it.login != info.login } + info
             prefs[Keys.ACCOUNTS_JSON] = gson.toJson(updated)
             prefs[Keys.ACTIVE_LOGIN]  = info.login
@@ -91,10 +94,7 @@ class AccountStore(private val context: Context) {
     suspend fun removeAccount(login: String): List<AccountInfo> {
         var remaining: List<AccountInfo> = emptyList()
         context.dataStore.edit { prefs ->
-            val current: List<AccountInfo> = try {
-                gson.fromJson(prefs[Keys.ACCOUNTS_JSON] ?: "[]", listType) ?: emptyList()
-            } catch (_: Exception) { emptyList() }
-
+            val current = parseAccounts(prefs[Keys.ACCOUNTS_JSON])
             remaining = current.filter { it.login != login }
             prefs[Keys.ACCOUNTS_JSON] = gson.toJson(remaining)
 

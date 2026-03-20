@@ -34,7 +34,7 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      # ── 1. Checkout ──
+      # ── 1. Checkout（fetch-depth: 0 确保 git cliff 能读完整历史）──
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -69,20 +69,36 @@ jobs:
           else
             echo "name=debug-$(date +%Y%m%d-%H%M)" >> $GITHUB_OUTPUT
           fi
+          # versionCode 使用 run_number，每次构建自动递增，无需手动维护
+          echo "code=${{ github.run_number }}" >> $GITHUB_OUTPUT
 
-      # ── 5. 权限 ──
+      # ── 5. 生成 Changelog（仅 release 时执行）──
+      - name: Generate Changelog
+        if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.release_type == 'release'
+        uses: orhun/git-cliff-action@v4
+        id: cliff
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: CHANGELOG_RELEASE.md
+          GITHUB_REPO: ${{ github.repository }}
+
+      # ── 6. 权限 ──
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      # ── 6a. Debug 构建（OAuth 凭据通过环境变量注入 BuildConfig）──
+      # ── 7a. Debug 构建 ──
       - name: Build Debug APK
         if: ${{ github.event.inputs.release_type == 'debug' || !startsWith(github.ref, 'refs/tags/') }}
         env:
           OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID }}
           OAUTH_CALLBACK_URL: ${{ secrets.OAUTH_CALLBACK_URL }}
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+          VERSION_CODE: ${{ steps.version.outputs.code }}
         run: ./gradlew assembleDebug --no-daemon --stacktrace
 
-      # ── 6b. Release 构建（需要签名）──
+      # ── 7b. Release 构建（需要签名）──
       - name: Decode Keystore
         if: ${{ github.event.inputs.release_type == 'release' || startsWith(github.ref, 'refs/tags/') }}
         run: |
@@ -97,9 +113,11 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+          VERSION_CODE: ${{ steps.version.outputs.code }}
         run: ./gradlew assembleRelease --no-daemon --stacktrace
 
-      # ── 7. 上传 Artifact ──
+      # ── 8. 上传 Artifact ──
       - name: Upload Debug APK
         if: ${{ github.event.inputs.release_type == 'debug' || !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/upload-artifact@v4
@@ -116,26 +134,21 @@ jobs:
           path: app/build/outputs/apk/release/*.apk
           retention-days: 90
 
-      # ── 8. 自动发布 GitHub Release ──
+      # ── 9. 发布 GitHub Release ──
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.release_type == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          # 【关键修改】：明确指定 Tag 名称
-          # 如果是推送 tag 触发，它会使用该 tag；
-          # 如果是手动触发，它会使用我们在第 4 步计算出的 version 名称
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', steps.version.outputs.name) }}
           name: GitMob v${{ steps.version.outputs.name }}
+          body_path: CHANGELOG_RELEASE.md
           draft: false
           prerelease: false
-          generate_release_notes: true
-          # 确保指向正确的 release 路径
           files: app/build/outputs/apk/release/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-
-      # ── 9. 清理 keystore ──
+      # ── 10. 清理 keystore ──
       - name: Clean keystore
         if: always()
         run: rm -f /tmp/gitmob.keystore

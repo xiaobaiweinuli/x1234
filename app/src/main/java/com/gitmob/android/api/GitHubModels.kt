@@ -582,3 +582,25 @@ data class CheckboxOption(
     val required: Boolean = false,
     val checked: Boolean = false,
 )
+
+// ─── Git Data API (upload / commit multiple files) ────────────────────────────
+
+/** POST /git/blobs */
+data class GHCreateBlobRequest(
+    val content: String,   // base64
+    val encoding: String = "base64",
+)
+data class GHBlobResponse(val sha: String, val url: String)
+
+/** POST /git/trees — 每个文件一个 TreeItem */
+data class GHTreeItem(
+    val path: String,
+    val mode: String = "100644",   // 普通文件
+    val type: String = "blob",
+    val sha: String,
+)
+data class GHCreateTreeRequest(
+    val tree: List<GHTreeItem>,
+    @SerializedName("base_tree") val baseTree: String? = null,
+)
+data class GHTreeResponse(val sha: String, val url: String)

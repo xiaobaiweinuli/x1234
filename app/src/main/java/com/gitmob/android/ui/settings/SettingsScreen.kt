@@ -658,22 +658,27 @@ fun SettingsScreen(
                             onClick = {
                                 showLogoutDialog = false
                                 scope.launch {
-                                    val login = activeLogin ?: return@launch
                                     val token = tokenStorage.accessToken.first()
-                                    // 撤销服务端 token
+                                    // 撤销服务端 token（结果不影响本地清除流程）
                                     if (!token.isNullOrBlank()) {
                                         com.gitmob.android.auth.OAuthManager.revokeToken(token)
                                     }
-                                    // 从账号列表移除，获取剩余账号
-                                    val remaining = accountStore.removeAccount(login)
-                                    if (remaining.isNotEmpty()) {
-                                        // 切换到下一个账号
-                                        val next = remaining.first()
-                                        tokenStorage.syncActiveAccount(next)
-                                        com.gitmob.android.api.ApiClient.rebuild()
-                                        onSwitchAccount(next)
+                                    val login = activeLogin
+                                    if (login != null) {
+                                        // 有已知登录账号：从账号列表移除，按剩余账号决策
+                                        val remaining = accountStore.removeAccount(login)
+                                        if (remaining.isNotEmpty()) {
+                                            val next = remaining.first()
+                                            tokenStorage.syncActiveAccount(next)
+                                            com.gitmob.android.api.ApiClient.rebuild()
+                                            onSwitchAccount(next)
+                                        } else {
+                                            tokenStorage.clearActiveAccount()
+                                            onLogout()
+                                        }
                                     } else {
-                                        // 无剩余账号，清空并跳登录页
+                                        // activeLogin 为 null（首次登录未保存用户信息）
+                                        // 仍需清除本地 token 并跳转登录页
                                         tokenStorage.clearActiveAccount()
                                         onLogout()
                                     }
@@ -726,20 +731,27 @@ fun SettingsScreen(
                             onClick = {
                                 showRevokeDialog = false
                                 scope.launch {
-                                    val login = activeLogin ?: return@launch
                                     val token = tokenStorage.accessToken.first()
-                                    // 彻底删除 Grant
+                                    // 彻底删除 Grant（结果不影响本地清除流程）
                                     if (!token.isNullOrBlank()) {
                                         com.gitmob.android.auth.OAuthManager.deleteGrant(token)
                                     }
-                                    // 从账号列表移除
-                                    val remaining = accountStore.removeAccount(login)
-                                    if (remaining.isNotEmpty()) {
-                                        val next = remaining.first()
-                                        tokenStorage.syncActiveAccount(next)
-                                        com.gitmob.android.api.ApiClient.rebuild()
-                                        onSwitchAccount(next)
+                                    val login = activeLogin
+                                    if (login != null) {
+                                        // 从账号列表移除，按剩余账号决策
+                                        val remaining = accountStore.removeAccount(login)
+                                        if (remaining.isNotEmpty()) {
+                                            val next = remaining.first()
+                                            tokenStorage.syncActiveAccount(next)
+                                            com.gitmob.android.api.ApiClient.rebuild()
+                                            onSwitchAccount(next)
+                                        } else {
+                                            tokenStorage.clearActiveAccount()
+                                            onLogout()
+                                        }
                                     } else {
+                                        // activeLogin 为 null（登录信息不完整）
+                                        // 仍需清除本地 token 并跳转登录页
                                         tokenStorage.clearActiveAccount()
                                         onLogout()
                                     }
@@ -771,7 +783,7 @@ fun SettingsScreen(
             }
 
             Spacer(Modifier.height(8.dp))
-            Text("GitMob v${BuildConfig.VERSION_NAME} · AGPL-3.0",
+            Text("GitMob v${BuildConfig.VERSION_NAME} · Apache 2.0",
                 fontSize = 11.sp, color = c.textTertiary,
                 modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 8.dp))
         }
@@ -830,7 +842,7 @@ fun AboutDialog(onDismiss: () -> Unit) {
                 AboutLinkRow(
                     icon = Icons.Default.Code,
                     label = "GitHub 仓库",
-                    sub = "xiaobaiweinuli/GitMob-Android · AGPL-3.0",
+                    sub = "xiaobaiweinuli/GitMob-Android · Apache 2.0",
                     url = "https://github.com/xiaobaiweinuli/GitMob-Android",
                     context = context, c = c,
                 )

@@ -41,6 +41,8 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import com.gitmob.android.api.*
 import com.gitmob.android.ui.common.*
 import com.gitmob.android.ui.theme.*
+import com.gitmob.android.ui.filepicker.FilePickerScreen
+import com.gitmob.android.ui.filepicker.PickerMode
 import com.gitmob.android.util.LogManager
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.RadioButton
@@ -115,6 +117,15 @@ fun RepoDetailScreen(
     var showDeleteFileDialog by remember { mutableStateOf(false) }
     var renameFileNewName by remember { mutableStateOf("") }
     val context = LocalContext.current
+
+    // ── 上传功能状态 ──────────────────────────────────────────────────────────
+    var showUploadSourceSheet  by remember { mutableStateOf(false) }
+    var showUploadReviewSheet  by remember { mutableStateOf(false) }
+    // 扫描/选取得到的待上传条目（传入 ReviewSheet）
+    var uploadEntries by remember { mutableStateOf<List<UploadFileEntry>>(emptyList()) }
+    // 文件夹选择器：等待 FilePickerScreen 返回路径
+    var showUploadFolderPicker by remember { mutableStateOf(false) }
+    var showUploadFilePicker   by remember { mutableStateOf(false) }
 
     state.toast?.let { msg ->
         LaunchedEffect(msg) { kotlinx.coroutines.delay(2500); vm.clearToast() }
@@ -414,6 +425,7 @@ fun RepoDetailScreen(
                     onFileClick = { path -> onFileClick(owner, repoName, path, state.currentBranch) },
                     onNavigateUp = vm::navigateUp,
                     onRefresh = { vm.loadContents(state.currentPath, forceRefresh = true) },
+                    onUpload = { showUploadSourceSheet = true },
                     onShare = {
                         val url = "https://github.com/$owner/$repoName/blob/${state.currentBranch}/${state.currentPath}"
                         val intent = Intent(Intent.ACTION_SEND).apply {
@@ -681,6 +693,95 @@ fun RepoDetailScreen(
     if (showWatchSheet) {
         WatchSheet(state = state, vm = vm, onDismiss = { showWatchSheet = false })
     }
+
+    // ── 上传入口 Sheet（选择"文件"还是"文件夹"）────────────────────────────
+    if (showUploadSourceSheet) {
+        UploadSourceSheet(
+            repoPath  = state.currentPath,
+            c         = c,
+            onPickFiles = {
+                showUploadSourceSheet = false
+                showUploadFilePicker  = true
+            },
+            onPickFolder = {
+                showUploadSourceSheet = false
+                showUploadFolderPicker = true
+            },
+            onDismiss = { showUploadSourceSheet = false },
+        )
+    }
+
+    // ── 文件多选 Picker ──────────────────────────────────────────────────────
+    if (showUploadFilePicker) {
+        FilePickerScreen(
+            title       = "选择要上传的文件",
+            mode        = PickerMode.MULTI_FILE,
+            rootEnabled = false,
+            detectGitRepos = false,
+            onConfirm   = { _, files ->
+                val repoBase = state.currentPath
+                uploadEntries = files.map { localPath ->
+                    val name      = java.io.File(localPath).name
+                    val repoPath  = if (repoBase.isEmpty()) name else "$repoBase/$name"
+                    val sizeBytes = java.io.File(localPath).length()
+                    UploadFileEntry(localPath, repoPath, sizeBytes)
+                }
+                showUploadFilePicker  = false
+                showUploadReviewSheet = true
+            },
+            onDismiss = { showUploadFilePicker = false },
+        )
+    }
+
+    // ── 文件夹 Picker ────────────────────────────────────────────────────────
+    if (showUploadFolderPicker) {
+        FilePickerScreen(
+            title       = "选择要上传的文件夹",
+            mode        = PickerMode.DIRECTORY,
+            rootEnabled = false,
+            detectGitRepos = false,
+            onConfirm   = { localDir, _ ->
+                val repoBase = state.currentPath
+                uploadEntries = scanDirectory(java.io.File(localDir), repoBase)
+                showUploadFolderPicker = false
+                showUploadReviewSheet  = true
+            },
+            onDismiss = { showUploadFolderPicker = false },
+        )
+    }
+
+    // ── 上传预览 Sheet（勾选文件 + commit message）──────────────────────────
+    if (showUploadReviewSheet && uploadEntries.isNotEmpty()) {
+        UploadReviewSheet(
+            allEntries = uploadEntries,
+            c          = c,
+            onConfirm  = { selected, message ->
+                showUploadReviewSheet = false
+                vm.uploadFiles(
+                    fileEntries   = selected.map { Pair(it.localPath, it.repoPath) },
+                    commitMessage = message,
+                    onSuccess     = { /* 进度弹窗自己处理 DONE 状态 */ },
+                    onError       = { /* 进度弹窗自己处理 ERROR 状态 */ },
+                )
+            },
+            onDismiss = { showUploadReviewSheet = false },
+        )
+    }
+
+    // ── 上传进度弹窗（上传进行中 / 完成 / 失败）──────────────────────────
+    if (state.uploadPhase != UploadPhase.IDLE) {
+        UploadProgressDialog(
+            phase        = state.uploadPhase,
+            blobProgress = state.uploadBlobProgress,
+            blobTotal    = state.uploadBlobTotal,
+            currentFile  = state.uploadCurrentFile,
+            errorMsg     = state.uploadError,
+            c            = c,
+            onDone  = { vm.resetUploadState() },
+            onRetry = { vm.resetUploadState() },
+        )
+    }
+
     // Commit 详情 Modal
     state.selectedCommit?.let { commit ->
         CommitDetailSheet(commit = commit, c = c, vm = vm, onDismiss = vm::clearCommitDetail)
@@ -716,6 +817,7 @@ fun FilesTab(
     onFileClick: (String) -> Unit,
     onNavigateUp: () -> Unit,
     onRefresh: () -> Unit = {},
+    onUpload: () -> Unit = {},
     onShare: () -> Unit = {},
     onAddFile: () -> Unit = {},
     onHistory: () -> Unit = {},
@@ -757,6 +859,17 @@ fun FilesTab(
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        IconButton(
+                            onClick = onUpload,
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Upload,
+                                contentDescription = "上传文件",
+                                tint = Coral,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
                         IconButton(
                             onClick = onShare,
                             modifier = Modifier.size(32.dp)

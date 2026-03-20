@@ -253,6 +253,31 @@ interface GitHubApi {
         @Path("releaseId") releaseId: Long,
     ): retrofit2.Response<Unit>
 
+    // ── Git Data API (multi-file commit) ──────────────────────────────────────
+    /** 获取分支最新 commit SHA：GET /repos/{owner}/{repo}/git/refs/heads/{branch} */
+    @GET("repos/{owner}/{repo}/git/refs/heads/{branch}")
+    suspend fun getRef(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("branch") branch: String,
+    ): GHRef
+
+    /** 创建 blob（单个文件内容）：POST /repos/{owner}/{repo}/git/blobs */
+    @POST("repos/{owner}/{repo}/git/blobs")
+    suspend fun createBlob(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Body body: GHCreateBlobRequest,
+    ): GHBlobResponse
+
+    /** 创建 tree（包含多个 blob）：POST /repos/{owner}/{repo}/git/trees */
+    @POST("repos/{owner}/{repo}/git/trees")
+    suspend fun createTree(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Body body: GHCreateTreeRequest,
+    ): GHTreeResponse
+
     // ── SSH Keys ──
     @GET("user/keys")
     suspend fun getSSHKeys(): List<GHSSHKey>
