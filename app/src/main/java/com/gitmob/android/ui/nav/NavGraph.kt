@@ -130,6 +130,35 @@ fun AppNavGraph(
 
     val startDest = if (initState is AppInitState.NeedsLogin) Route.Login.path else Route.Main.path
 
+    // ── accounts_json 自动补全 ──────────────────────────────────────────────
+    // 场景：release 混淆崩溃等原因导致 access_token 有效但 accounts_json 缺失。
+    // token 存在时，自动用 API 拉取用户信息并写入 AccountStore，无需重新登录。
+    val context = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(initState) {
+        if (initState !is AppInitState.Ready) return@LaunchedEffect
+        val accountStore = com.gitmob.android.auth.AccountStore(context)
+        val existingAccounts = accountStore.accounts.first()
+        if (existingAccounts.isNotEmpty()) return@LaunchedEffect  // 已有数据，无需恢复
+
+        val token = tokenStorage.accessToken.first() ?: return@LaunchedEffect
+        try {
+            // token 有效但 accounts_json 为空 → 静默拉取用户信息补全
+            val user = com.gitmob.android.api.ApiClient.api.getCurrentUser()
+            val info = com.gitmob.android.auth.AccountInfo(
+                login     = user.login,
+                name      = user.name ?: user.login,
+                email     = user.email ?: "${user.login}@users.noreply.github.com",
+                avatarUrl = user.avatarUrl ?: "",
+                token     = token,
+            )
+            accountStore.addOrUpdateAccount(info)
+            tokenStorage.syncActiveAccount(info)
+            com.gitmob.android.util.LogManager.i("NavGraph", "accounts_json 自动恢复成功: ${user.login}")
+        } catch (_: Exception) {
+            // 网络失败或 token 已失效 → 静默忽略，不影响正常使用
+        }
+    }
+
     // 监听 401 Token 失效事件
     LaunchedEffect(Unit) {
         ApiClient.tokenExpired.collect {
