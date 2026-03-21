@@ -26,8 +26,11 @@
 -keep class * implements com.google.gson.JsonSerializer
 -keep class * implements com.google.gson.JsonDeserializer
 
-# Data models — 保留完整类名和成员（Gson 反序列化依赖类名）
+# Data models — 保留完整类名和成员（Gson 反序列化依赖字段名，R8 不得重命名）
 -keep class com.gitmob.android.api.** { *; }
+-keep class com.gitmob.android.auth.AccountInfo { *; }
+-keep class com.gitmob.android.local.LocalRepo { *; }
+-keep class com.gitmob.android.ui.filepicker.BookmarkPath { *; }
 -keep class com.gitmob.android.ui.repo.RepoDetailState { *; }
 -keep class com.gitmob.android.ui.repo.UploadPhase { *; }
 
