@@ -50,11 +50,11 @@ data class FileEntry(
  * 书签：iconKey 使用 String 而非 ImageVector，Gson 可以正确序列化/反序列化。
  */
 data class BookmarkPath(
-    val label: String,
-    val path: String,
-    val iconKey: String = "Folder",          // Gson 友好：String 而不是 ImageVector
-    val requiresRoot: Boolean = false,
-    val isCustom: Boolean = false,
+    @com.google.gson.annotations.SerializedName("label")        val label: String,
+    @com.google.gson.annotations.SerializedName("path")         val path: String,
+    @com.google.gson.annotations.SerializedName("iconKey")      val iconKey: String = "Folder",
+    @com.google.gson.annotations.SerializedName("requiresRoot") val requiresRoot: Boolean = false,
+    @com.google.gson.annotations.SerializedName("isCustom")     val isCustom: Boolean = false,
 )
 
 /** 根据 iconKey 解析出实际图标（空值/未知 key 均返回 Folder 兜底，防止 NPE） */

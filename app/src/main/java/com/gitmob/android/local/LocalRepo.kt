@@ -15,12 +15,12 @@ enum class LocalRepoStatus {
 }
 
 data class LocalRepo(
-    val id: String,                        // UUID
-    val path: String,                      // 本地绝对路径
-    val name: String,                      // 目录名
-    val status: LocalRepoStatus = LocalRepoStatus.PENDING_INIT,
+    @SerializedName("id")     val id: String,
+    @SerializedName("path")   val path: String,
+    @SerializedName("name")   val name: String,
+    @SerializedName("status") val status: LocalRepoStatus = LocalRepoStatus.PENDING_INIT,
     @SerializedName("remote_url")
-    val remoteUrl: String? = null,         // GitHub 远程地址
+    val remoteUrl: String? = null,
     @SerializedName("current_branch")
     val currentBranch: String? = null,
     @SerializedName("last_commit")
@@ -30,6 +30,6 @@ data class LocalRepo(
     @SerializedName("behind_count")
     val behindCount: Int = 0,
     @SerializedName("changed_files_count")
-    val changedFilesCount: Int? = null,    // 变动文件数量，null 表示无变动
-    val error: String? = null,
+    val changedFilesCount: Int? = null,
+    @SerializedName("error")  val error: String? = null,
 )

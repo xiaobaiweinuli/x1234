@@ -4,19 +4,23 @@ import android.content.Context
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.google.gson.Gson
+import com.google.gson.annotations.SerializedName
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 /**
  * 单个账号的完整信息（token 明文存储，与现有单账号模式一致）
+ *
+ * 所有字段均标注 @SerializedName，确保 R8 混淆后 Gson 仍能按 JSON key 正确反序列化，
+ * 与 proguard-rules.pro 的 -keepclassmembers ... @SerializedName 规则配合双重保护。
  */
 data class AccountInfo(
-    val login: String,
-    val name: String,
-    val email: String,
-    val avatarUrl: String,
-    val token: String,
+    @SerializedName("login")     val login: String,
+    @SerializedName("name")      val name: String,
+    @SerializedName("email")     val email: String,
+    @SerializedName("avatarUrl") val avatarUrl: String,
+    @SerializedName("token")     val token: String,
 ) {
     val displayName: String get() = name.ifBlank { login }
 }

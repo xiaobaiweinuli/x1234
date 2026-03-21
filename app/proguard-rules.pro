@@ -27,10 +27,8 @@
 -keep class * implements com.google.gson.JsonDeserializer
 
 # Data models — 保留完整类名和成员（Gson 反序列化依赖字段名，R8 不得重命名）
+# AccountInfo / LocalRepo / BookmarkPath 已通过 @SerializedName 逐字段保护，无需整类 keep
 -keep class com.gitmob.android.api.** { *; }
--keep class com.gitmob.android.auth.AccountInfo { *; }
--keep class com.gitmob.android.local.LocalRepo { *; }
--keep class com.gitmob.android.ui.filepicker.BookmarkPath { *; }
 -keep class com.gitmob.android.ui.repo.RepoDetailState { *; }
 -keep class com.gitmob.android.ui.repo.UploadPhase { *; }
 
