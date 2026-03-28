@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -27,7 +28,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 import com.gitmob.android.api.GHOrg
 import com.gitmob.android.api.GHRepo
 import com.gitmob.android.ui.common.*
@@ -47,11 +48,18 @@ fun RepoListScreen(
     onCreateRepo: () -> Unit,
     onCloneRepo: (String) -> Unit = {},
     vm: RepoListViewModel = viewModel(),
+    starVm: StarListViewModel = viewModel(),
 ) {
     val c = LocalGmColors.current
     val state by vm.state.collectAsState()
     val repos by vm.filteredRepos.collectAsState()
+    val starState by starVm.state.collectAsState()
     var showOrgMenu by remember { mutableStateOf(false) }
+    // 星标模式弹窗状态
+    var showCreateListDialog by remember { mutableStateOf(false) }
+    var editingList by remember { mutableStateOf<UserList?>(null) }
+    var classifyRepo by remember { mutableStateOf<StarredRepo?>(null) }
+    var createListFromClassify by remember { mutableStateOf(false) }
 
     // Toast
     state.toast?.let { msg ->
@@ -118,6 +126,11 @@ fun RepoListScreen(
                     }
                 },
                 actions = {
+                    // 星标管理按钮
+                    StarModeToggleButton(
+                        active = starState.starModeActive,
+                        onClick = { starVm.toggleStarMode() },
+                    )
                     IconButton(onClick = onCreateRepo) {
                         Icon(Icons.Default.Add, null, tint = Coral)
                     }
@@ -161,42 +174,314 @@ fun RepoListScreen(
                     focusedTextColor = c.textPrimary, unfocusedTextColor = c.textPrimary,
                 ),
             )
-            // 过滤
-            Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(null to "全部", false to "公开", true to "私有").forEach { (value, label) ->
-                    FilterChip(
-                        selected = state.filterPrivate == value,
-                        onClick = { vm.setFilter(value) },
-                        label = { Text(label, fontSize = 12.sp) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = CoralDim, selectedLabelColor = Coral,
-                            containerColor = c.bgCard, labelColor = c.textSecondary,
-                        ),
-                    )
-                }
-            }
-
-            when {
-                state.loading && repos.isEmpty() -> LoadingBox()
-                state.error != null && repos.isEmpty() -> ErrorBox(state.error!!) { vm.loadRepos(true) }
-                repos.isEmpty() -> EmptyBox("暂无仓库，点击右上角 + 创建")
-                else -> LazyColumn(
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(repos, key = { it.id }) { repo ->
-                        SwipeableRepoCard(
-                            repo = repo,
-                            onClick = { onRepoClick(repo.owner.login, repo.name) },
-                            onDelete = { vm.deleteRepo(repo.owner.login, repo.name) },
-                            onRename = { newName -> vm.renameRepo(repo.owner.login, repo.name, newName) },
-                            onEdit = { desc, site, topics -> vm.editRepo(repo.owner.login, repo.name, desc, site, topics) },
-                            onClone = { url -> onCloneRepo(url) },
-                            c = c,
+            // 过滤 / 星标模式 Header
+            if (starState.starModeActive) {
+                UserListsHeader(
+                    lists = starState.userLists,
+                    loading = starState.listsLoading,
+                    expanded = starState.listsExpanded,
+                    selectedListId = starState.selectedListId,
+                    onToggleExpand = starVm::toggleListsExpanded,
+                    onSelectList = { id ->
+                        starVm.selectList(id)
+                        if (starState.listsExpanded) starVm.toggleListsExpanded()
+                    },
+                    onCreate = { showCreateListDialog = true },
+                    onEdit = { editingList = it },
+                    onDelete = starVm::deleteList,
+                    c = c,
+                )
+            } else {
+                Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(null to "全部", false to "公开", true to "私有").forEach { (value, label) ->
+                        FilterChip(
+                            selected = state.filterPrivate == value,
+                            onClick = { vm.setFilter(value) },
+                            label = { Text(label, fontSize = 12.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = CoralDim, selectedLabelColor = Coral,
+                                containerColor = c.bgCard, labelColor = c.textSecondary,
+                            ),
                         )
                     }
                 }
             }
+
+            if (starState.starModeActive) {
+                // ── 星标模式：显示星标仓库 ────────────────────────────────────
+                when {
+                    starState.reposLoading && starState.starredRepos.isEmpty() -> LoadingBox()
+                    starState.starredRepos.isEmpty() -> EmptyBox("该列表暂无仓库")
+                    else -> {
+                        val listState = rememberLazyListState()
+                        val scope = rememberCoroutineScope()
+                        // 滚到底部时自动加载更多
+                        val lastIndex = starState.starredRepos.lastIndex
+                        LaunchedEffect(listState.firstVisibleItemIndex) {
+                            if (starState.hasNextPage && !starState.reposLoading &&
+                                listState.firstVisibleItemIndex >= lastIndex - 5) {
+                                starVm.loadStarredRepos(loadMore = true)
+                            }
+                        }
+                        LazyColumn(
+                            state = listState,
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            items(starState.starredRepos, key = { it.nodeId }) { starred ->
+                                SwipeableStarredRepoCard(
+                                    repo = starred,
+                                    onClick = {
+                                        val parts = starred.nameWithOwner.split("/")
+                                        onRepoClick(parts[0], parts[1])
+                                    },
+                                    onRemoveStar = { starVm.removeStar(starred) },
+                                    onClassify = { classifyRepo = starred },
+                                    c = c,
+                                )
+                            }
+                            if (starState.hasNextPage) {
+                                item {
+                                    Box(Modifier.fillMaxWidth().padding(8.dp), contentAlignment = Alignment.Center) {
+                                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = Coral)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                // ── 普通模式：显示我的仓库 ────────────────────────────────────
+                when {
+                    state.loading && repos.isEmpty() -> LoadingBox()
+                    state.error != null && repos.isEmpty() -> ErrorBox(state.error!!) { vm.loadRepos(true) }
+                    repos.isEmpty() -> EmptyBox("暂无仓库，点击右上角 + 创建")
+                    else -> LazyColumn(
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        items(repos, key = { it.id }) { repo ->
+                            SwipeableRepoCard(
+                                repo = repo,
+                                onClick = { onRepoClick(repo.owner.login, repo.name) },
+                                onDelete = { vm.deleteRepo(repo.owner.login, repo.name) },
+                                onRename = { newName -> vm.renameRepo(repo.owner.login, repo.name, newName) },
+                                onEdit = { desc, site, topics -> vm.editRepo(repo.owner.login, repo.name, desc, site, topics) },
+                                onClone = { url -> onCloneRepo(url) },
+                                c = c,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 星标模式弹窗 ───────────────────────────────────────────────────────────
+    starState.toast?.let { msg ->
+        LaunchedEffect(msg) { kotlinx.coroutines.delay(2500); starVm.clearToast() }
+    }
+
+    // 创建列表弹窗
+    if (showCreateListDialog || createListFromClassify) {
+        UserListDialog(
+            title = "新建列表",
+            c = c,
+            onConfirm = { name, desc, priv ->
+                starVm.createList(name, desc, priv)
+                showCreateListDialog = false
+                createListFromClassify = false
+            },
+            onDismiss = { showCreateListDialog = false; createListFromClassify = false },
+        )
+    }
+
+    // 编辑列表弹窗
+    editingList?.let { list ->
+        UserListDialog(
+            title = "编辑列表",
+            initialName = list.name,
+            initialDescription = list.description,
+            initialIsPrivate = list.isPrivate,
+            c = c,
+            onConfirm = { name, desc, priv ->
+                starVm.updateList(list, name, desc, priv)
+                editingList = null
+            },
+            onDismiss = { editingList = null },
+        )
+    }
+
+    // 仓库分类管理 Sheet
+    classifyRepo?.let { repo ->
+        RepoListClassifySheet(
+            repo = repo,
+            userLists = starState.userLists,
+            c = c,
+            onUpdate = { starVm.updateRepoLists(repo, it) },
+            onCreateList = { createListFromClassify = true },
+            onDismiss = { classifyRepo = null },
+        )
+    }
+}
+
+// ── 星标仓库卡片（左滑确认取消星标，书签图标打开分类Sheet）──────────────────
+@Composable
+private fun SwipeableStarredRepoCard(
+    repo: StarredRepo,
+    onClick: () -> Unit,
+    onRemoveStar: () -> Unit,
+    onClassify: () -> Unit,
+    c: GmColors,
+) {
+    var showRemoveConfirm by remember { mutableStateOf(false) }
+
+    val dismissState = rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            if (value == SwipeToDismissBoxValue.EndToStart) {
+                showRemoveConfirm = true
+            }
+            false  // 永不真实 dismiss，由弹窗确认后操作
+        }
+    )
+    SwipeToDismissBox(
+        state = dismissState,
+        enableDismissFromStartToEnd = false,
+        backgroundContent = {
+            val triggered = dismissState.targetValue == SwipeToDismissBoxValue.EndToStart
+            val color by animateColorAsState(
+                if (triggered) Yellow.copy(alpha = 0.85f) else Color.Transparent,
+                label = "swipe_star",
+            )
+            Box(
+                Modifier.fillMaxSize().background(color, RoundedCornerShape(14.dp)),
+                contentAlignment = Alignment.CenterEnd,
+            ) {
+                if (triggered) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(end = 20.dp),
+                    ) {
+                        Icon(Icons.Default.StarBorder, null, tint = Color.White, modifier = Modifier.size(22.dp))
+                        Text("取消", fontSize = 11.sp, color = Color.White, modifier = Modifier.padding(top = 3.dp))
+                    }
+                }
+            }
+        },
+    ) {
+        StarredRepoCard(repo = repo, onClick = onClick, onClassify = onClassify, c = c)
+    }
+
+    // 取消星标确认弹窗
+    if (showRemoveConfirm) {
+        AlertDialog(
+            onDismissRequest = { showRemoveConfirm = false },
+            containerColor = c.bgCard,
+            icon = { Icon(Icons.Default.StarBorder, null, tint = Yellow, modifier = Modifier.size(26.dp)) },
+            title = { Text("取消星标？", color = c.textPrimary, fontWeight = FontWeight.SemiBold) },
+            text = {
+                Text(
+                    "确定要取消对「${repo.name}」的星标吗？",
+                    color = c.textSecondary, fontSize = 13.sp,
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = { onRemoveStar(); showRemoveConfirm = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = Yellow),
+                ) { Text("取消星标", color = Color.Black) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRemoveConfirm = false }) {
+                    Text("保留", color = c.textSecondary)
+                }
+            },
+        )
+    }
+}
+
+// ── 星标仓库独立卡片（不复用RepoCardContent，三点按钮打开分类Sheet）──────────
+@Composable
+private fun StarredRepoCard(
+    repo: StarredRepo,
+    onClick: () -> Unit,
+    onClassify: () -> Unit,
+    c: GmColors,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(c.bgCard, RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(14.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = repo.name,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 15.sp,
+                    color = c.textPrimary,
+                    maxLines = 1,
+                )
+                if (!repo.description.isNullOrBlank()) {
+                    Text(
+                        text = repo.description,
+                        fontSize = 12.sp,
+                        color = c.textSecondary,
+                        maxLines = 2,
+                        modifier = Modifier.padding(top = 3.dp),
+                    )
+                }
+            }
+            if (repo.isPrivate) GmBadge("私有", RedDim, RedColor)
+            Spacer(Modifier.width(4.dp))
+            // 书签按钮 → 打开分类管理 Sheet
+            IconButton(onClick = onClassify, modifier = Modifier.size(28.dp)) {
+                Icon(
+                    Icons.Default.BookmarkAdd,
+                    contentDescription = "分类管理",
+                    tint = if (repo.listIds.isNotEmpty()) Yellow else c.textTertiary,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+        // 底部信息行
+        Spacer(Modifier.height(8.dp))
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // 语言
+            if (!repo.language.isNullOrBlank()) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Box(Modifier.size(10.dp).background(Yellow, androidx.compose.foundation.shape.CircleShape))
+                    Text(repo.language, fontSize = 11.sp, color = c.textTertiary)
+                }
+            }
+            // 星标数
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                Icon(Icons.Default.Star, null, tint = Yellow, modifier = Modifier.size(12.dp))
+                Text(repo.stars.toString(), fontSize = 11.sp, color = c.textTertiary)
+            }
+            // 所属列表数量提示
+            if (repo.listIds.isNotEmpty()) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Icon(Icons.Default.Bookmark, null, tint = Yellow.copy(alpha = 0.7f), modifier = Modifier.size(11.dp))
+                    Text("${repo.listIds.size}个列表", fontSize = 10.sp, color = c.textTertiary)
+                }
+            }
+            Spacer(Modifier.weight(1f))
+            // 所有者
+            Text(
+                repo.ownerLogin,
+                fontSize = 10.5.sp,
+                color = BlueColor,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier
+                    .background(BlueDim, RoundedCornerShape(20.dp))
+                    .padding(horizontal = 7.dp, vertical = 2.dp),
+            )
         }
     }
 }
@@ -304,9 +589,10 @@ private fun RepoCardContent(
     repo: GHRepo,
     onClick: () -> Unit,
     onRename: () -> Unit,
-    onEdit: () -> Unit,
+    onEdit: (() -> Unit)?,
     onClone: () -> Unit,
     c: GmColors,
+    extraActions: @Composable (() -> Unit)? = null,
 ) {
     var showMenu by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -341,6 +627,8 @@ private fun RepoCardContent(
             }
             if (repo.private) GmBadge("私有", RedDim, RedColor)
             Spacer(Modifier.width(4.dp))
+            // 星标模式下注入自定义按钮（如分类管理三点菜单）
+            extraActions?.invoke()
             Box {
                 IconButton(onClick = { showMenu = true }, modifier = Modifier.size(28.dp)) {
                     Icon(Icons.Default.MoreVert, null, tint = c.textTertiary, modifier = Modifier.size(16.dp))
@@ -352,11 +640,13 @@ private fun RepoCardContent(
                         leadingIcon = { Icon(Icons.Default.DriveFileRenameOutline, null, tint = c.textSecondary, modifier = Modifier.size(16.dp)) },
                         onClick = { onRename(); showMenu = false },
                     )
-                    DropdownMenuItem(
-                        text = { Text("编辑信息", fontSize = 14.sp, color = c.textPrimary) },
-                        leadingIcon = { Icon(Icons.Default.Edit, null, tint = c.textSecondary, modifier = Modifier.size(16.dp)) },
-                        onClick = { onEdit(); showMenu = false },
-                    )
+                    if (onEdit != null) {
+                        DropdownMenuItem(
+                            text = { Text("编辑信息", fontSize = 14.sp, color = c.textPrimary) },
+                            leadingIcon = { Icon(Icons.Default.Edit, null, tint = c.textSecondary, modifier = Modifier.size(16.dp)) },
+                            onClick = { onEdit(); showMenu = false },
+                        )
+                    }
                     DropdownMenuItem(
                         text = { Text("克隆到本地", fontSize = 14.sp, color = c.textPrimary) },
                         leadingIcon = { Icon(Icons.Default.Download, null, tint = BlueColor, modifier = Modifier.size(16.dp)) },

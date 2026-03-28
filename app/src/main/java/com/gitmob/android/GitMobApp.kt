@@ -5,6 +5,10 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import coil3.ImageLoader
+import coil3.SingletonImageLoader
+import coil3.network.okhttp.OkHttpNetworkFetcherFactory
+import coil3.svg.SvgDecoder
 import com.gitmob.android.api.ApiClient
 import com.gitmob.android.auth.RootManager
 import com.gitmob.android.auth.TokenStorage
@@ -44,7 +48,16 @@ class GitMobApp : Application() {
             LogManager.init(this@GitMobApp, level)
         }
         ApiClient.init(tokenStorage)
-        // 3. Root 权限自动恢复（问题 6 + 7 + 8）
+        // 3. 初始化 Coil3（OkHttp 网络 + SVG 解码支持）
+        SingletonImageLoader.setSafe {
+            ImageLoader.Builder(this)
+                .components {
+                    add(OkHttpNetworkFetcherFactory())   // 使用 OkHttp 作为网络层
+                    add(SvgDecoder.Factory())             // 显式启用 SVG 支持
+                }
+                .build()
+        }
+        // 4. Root 权限自动恢复（问题 6 + 7 + 8）
         appScope.launch {
             val rootEnabled = tokenStorage.rootEnabled.first()
             if (!rootEnabled) {

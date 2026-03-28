@@ -59,7 +59,9 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import androidx.compose.ui.draw.clip
-import dev.jeziellago.compose.markdowntext.MarkdownText
+import com.mikepenz.markdown.m3.Markdown
+import com.mikepenz.markdown.m3.markdownColor
+import com.mikepenz.markdown.m3.markdownTypography
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Article
@@ -1050,9 +1052,12 @@ fun FilesTab(
                                 }
                             }
                             state.readmeContent != null -> {
-                                MarkdownText(
-                                    markdown = state.readmeContent!!,
-                                    style = androidx.compose.ui.text.TextStyle(color = c.textPrimary),
+                                Markdown(
+                                    content = state.readmeContent!!,
+                                    colors = markdownColor(text = c.textPrimary),
+                                    typography = markdownTypography(),
+                                    imageTransformer = com.mikepenz.markdown.coil3.Coil3ImageTransformerImpl,
+                                    modifier = Modifier.fillMaxWidth(),
                                 )
                             }
                             else -> {

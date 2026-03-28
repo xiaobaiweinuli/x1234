@@ -15,6 +15,7 @@ data class GHUser(
 
 data class GHRepo(
     val id: Long,
+    @SerializedName("node_id") val nodeId: String = "",
     val name: String,
     @SerializedName("full_name") val fullName: String,
     val description: String?,

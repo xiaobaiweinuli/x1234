@@ -12,6 +12,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -119,7 +120,7 @@ fun UploadSourceSheet(
                 Box(
                     modifier = Modifier.size(40.dp).background(Coral.copy(alpha = 0.12f), RoundedCornerShape(10.dp)),
                     contentAlignment = Alignment.Center,
-                ) { Icon(Icons.Default.InsertDriveFile, null, tint = Coral, modifier = Modifier.size(20.dp)) }
+                ) { Icon(Icons.AutoMirrored.Filled.InsertDriveFile, null, tint = Coral, modifier = Modifier.size(20.dp)) }
                 Column(modifier = Modifier.weight(1f)) {
                     Text("选择文件", fontSize = 14.sp, color = c.textPrimary, fontWeight = FontWeight.Medium)
                     Text("多选文件，直接上传到当前目录", fontSize = 11.sp, color = c.textTertiary)

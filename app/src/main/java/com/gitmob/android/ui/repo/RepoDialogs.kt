@@ -564,7 +564,7 @@ fun RepoTransferTargetRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        coil.compose.AsyncImage(
+        coil3.compose.AsyncImage(
             model = avatarUrl,
             contentDescription = null,
             modifier = Modifier

@@ -28,9 +28,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.jeziellago.compose.markdowntext.MarkdownText
+import com.mikepenz.markdown.m3.Markdown
+import com.mikepenz.markdown.m3.markdownColor
+import com.mikepenz.markdown.m3.markdownTypography
 import androidx.lifecycle.viewmodel.compose.viewModel
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import com.gitmob.android.api.*
 import com.gitmob.android.ui.common.GmDivider
@@ -517,13 +519,14 @@ private fun IssueBodyCard(
                     lineHeight = 20.sp,
                 )
             } else {
-                MarkdownText(
-                    markdown = issue.body!!,
-                    style = androidx.compose.ui.text.TextStyle(
-                        color = c.textPrimary,
-                        fontSize = 14.sp,
-                        lineHeight = 20.sp,
+                Markdown(
+                    content = issue.body!!,
+                    colors = markdownColor(text = c.textPrimary),
+                    typography = markdownTypography(
+                        paragraph = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, lineHeight = 20.sp),
                     ),
+                    imageTransformer = com.mikepenz.markdown.coil3.Coil3ImageTransformerImpl,
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
         }
@@ -659,13 +662,14 @@ private fun CommentCard(
                 }
             }
             Spacer(modifier = Modifier.height(12.dp))
-            MarkdownText(
-                markdown = comment.body,
-                style = androidx.compose.ui.text.TextStyle(
-                    color = c.textPrimary,
-                    fontSize = 14.sp,
-                    lineHeight = 20.sp,
+            Markdown(
+                content = comment.body,
+                colors = markdownColor(text = c.textPrimary),
+                typography = markdownTypography(
+                    paragraph = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, lineHeight = 20.sp),
                 ),
+                imageTransformer = com.mikepenz.markdown.coil3.Coil3ImageTransformerImpl,
+                modifier = Modifier.fillMaxWidth(),
             )
         }
     }

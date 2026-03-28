@@ -33,7 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 import com.gitmob.android.auth.RootManager
 import com.gitmob.android.auth.ThemeMode
 import com.gitmob.android.auth.TokenStorage
