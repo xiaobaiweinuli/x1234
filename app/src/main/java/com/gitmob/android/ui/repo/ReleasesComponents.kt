@@ -346,22 +346,21 @@ fun ReleaseCard(
     onEditClick: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
+    var showDetailSheet by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .background(c.bgCard, RoundedCornerShape(12.dp))
+            .clickable { showDetailSheet = true }
             .padding(12.dp)
     ) {
+        // ── 顶行：badge + tag + 编辑 ─────────────────────────────────────
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (release.prerelease) {
-                GmBadge("预发布", YellowDim, Yellow)
-            }
-            if (release.draft) {
-                GmBadge("草稿", c.textTertiary, c.textSecondary)
-            }
+            if (release.prerelease) GmBadge("预发布", YellowDim, Yellow)
+            if (release.draft) GmBadge("草稿", c.textTertiary, c.textSecondary)
             Spacer(Modifier.weight(1f))
             Text(release.tagName, fontSize = 12.sp, color = Coral, fontFamily = FontFamily.Monospace)
-            // 编辑按钮（仅传入 vm 时显示）
             if (vm != null && onEditClick != null) {
                 Box(
                     modifier = Modifier
@@ -374,21 +373,31 @@ fun ReleaseCard(
                 }
             }
         }
-        Spacer(Modifier.height(8.dp))
-        Text(release.name ?: release.tagName, fontSize = 14.sp, color = c.textPrimary, fontWeight = FontWeight.Medium)
-        release.body?.let { bodyText ->
-            Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(6.dp))
+        // ── 标题 ─────────────────────────────────────────────────────────
+        Text(
+            release.name ?: release.tagName,
+            fontSize = 14.sp, color = c.textPrimary, fontWeight = FontWeight.Medium,
+        )
+        // ── 摘要（最多2行，截断后显示省略号，提示可点击查看详情）───────
+        release.body?.takeIf { it.isNotBlank() }?.let { bodyText ->
+            Spacer(Modifier.height(4.dp))
             Text(
-                bodyText.take(200) + if (bodyText.length > 200) "…" else "",
+                text = bodyText.lines().take(3).joinToString("\n").let {
+                    if (bodyText.lines().size > 3) "$it…" else it
+                },
                 fontSize = 12.sp,
                 color = c.textSecondary,
-                maxLines = 3
+                maxLines = 3,
             )
+            Spacer(Modifier.height(2.dp))
+            Text("点击查看完整内容", fontSize = 10.sp, color = Coral.copy(alpha = 0.7f))
         }
+        // ── 资产列表 ─────────────────────────────────────────────────────
         if (release.assets.isNotEmpty()) {
             Spacer(Modifier.height(8.dp))
             GmDivider()
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(6.dp))
             Text("附件 (${release.assets.size})", fontSize = 11.sp, color = c.textTertiary)
             Spacer(Modifier.height(4.dp))
             release.assets.forEach { asset ->
@@ -398,7 +407,6 @@ fun ReleaseCard(
                     ?.collectAsState()?.value
                 val pct = (status as? com.gitmob.android.util.DownloadStatus.Progress)?.percent ?: 0
                 val isDownloading = status is com.gitmob.android.util.DownloadStatus.Progress
-                val isDone        = status is com.gitmob.android.util.DownloadStatus.Success
 
                 Box(
                     modifier = Modifier
@@ -420,26 +428,79 @@ fun ReleaseCard(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Icon(
-                            when {
-                                isDone        -> Icons.Default.CheckCircle
-                                isDownloading -> Icons.Default.Close
-                                else          -> Icons.Default.Download
-                            },
-                            null,
-                            tint = when {
-                                isDone        -> Green
-                                isDownloading -> Coral
-                                else          -> c.textTertiary
-                            },
-                            modifier = Modifier.size(16.dp),
-                        )
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(asset.name, fontSize = 12.sp, color = c.textPrimary, maxLines = 1)
-                            Text(formatSize(asset.size), fontSize = 10.sp, color = c.textTertiary)
+                        Icon(Icons.Default.Attachment, null, tint = c.textTertiary, modifier = Modifier.size(14.dp))
+                        Text(asset.name, fontSize = 12.sp, color = c.textPrimary, modifier = Modifier.weight(1f), maxLines = 1)
+                        Text(formatSize(asset.size), fontSize = 10.sp, color = c.textTertiary)
+                        when {
+                            isDownloading -> CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 1.5.dp, color = Coral)
+                            else -> Icon(Icons.Default.Download, null, tint = Coral, modifier = Modifier.size(14.dp))
                         }
-                        if (isDownloading)
-                            Text("$pct%", fontSize = 11.sp, color = Coral, fontWeight = FontWeight.Medium)
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 详情 BottomSheet ──────────────────────────────────────────────────
+    if (showDetailSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showDetailSheet = false },
+            containerColor = c.bgCard,
+            dragHandle = { BottomSheetDefaults.DragHandle(color = c.border) },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.9f)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp)
+                    .padding(bottom = 32.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                // 顶行
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (release.prerelease) GmBadge("预发布", YellowDim, Yellow)
+                    if (release.draft) GmBadge("草稿", c.textTertiary, c.textSecondary)
+                    Spacer(Modifier.weight(1f))
+                    Text(release.tagName, fontSize = 12.sp, color = Coral, fontFamily = FontFamily.Monospace)
+                }
+                Text(release.name ?: release.tagName, fontSize = 17.sp, color = c.textPrimary, fontWeight = FontWeight.SemiBold)
+                // 完整 body Markdown 渲染
+                release.body?.takeIf { it.isNotBlank() }?.let { bodyText ->
+                    com.mikepenz.markdown.m3.Markdown(
+                        content = bodyText,
+                        colors = com.mikepenz.markdown.m3.markdownColor(text = c.textPrimary),
+                        typography = com.mikepenz.markdown.m3.markdownTypography(),
+                        imageTransformer = com.mikepenz.markdown.coil3.Coil3ImageTransformerImpl,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                // 资产
+                if (release.assets.isNotEmpty()) {
+                    HorizontalDivider(color = c.border)
+                    Text("附件 (${release.assets.size})", fontSize = 12.sp, color = c.textTertiary, fontWeight = FontWeight.Medium)
+                    release.assets.forEach { asset ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(c.bgItem, RoundedCornerShape(8.dp))
+                                .clickable {
+                                    vm?.downloadAsset(asset)
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(asset.downloadUrl))
+                                    context.startActivity(intent)
+                                }
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Icon(Icons.Default.Attachment, null, tint = c.textTertiary, modifier = Modifier.size(15.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(asset.name, fontSize = 13.sp, color = c.textPrimary)
+                                Text(formatSize(asset.size), fontSize = 10.sp, color = c.textTertiary)
+                            }
+                            Icon(Icons.Default.Download, null, tint = Coral, modifier = Modifier.size(16.dp))
+                        }
                     }
                 }
             }

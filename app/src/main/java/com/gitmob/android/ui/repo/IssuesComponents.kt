@@ -459,7 +459,22 @@ fun IssuesTab(
         filterAndSortIssues(state.issues, state.issueFilterState)
     }
     var showCreateIssueDialog by remember { mutableStateOf(false) }
-    
+    var templatesLoading by remember { mutableStateOf(false) }
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+
+    // 滚动到底部时加载更多
+    val isAtBottom = remember {
+        derivedStateOf {
+            val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()
+            last != null && last.index >= listState.layoutInfo.totalItemsCount - 3
+        }
+    }
+    LaunchedEffect(isAtBottom.value) {
+        if (isAtBottom.value && state.issuesHasMore && !state.issuesLoadingMore) {
+            vm.loadMoreIssues()
+        }
+    }
+
     PullToRefreshBox(
         isRefreshing = state.issuesRefreshing,
         onRefresh = onRefresh,
@@ -469,13 +484,24 @@ fun IssuesTab(
                 state = state,
                 c = c,
                 vm = vm,
-                onAddIssueClick = { vm.loadIssueTemplates(); showCreateIssueDialog = true }
+                onAddIssueClick = {
+                    // 先加载模板，加载完成/失败后再打开弹窗
+                    templatesLoading = true
+                    vm.loadIssueTemplates {
+                        templatesLoading = false
+                        showCreateIssueDialog = true
+                    }
+                }
             )
-            
-            if (filteredAndSorted.isEmpty()) {
+
+            if (filteredAndSorted.isEmpty() && !state.issuesRefreshing) {
                 EmptyBox("暂无 Issues")
             } else {
-                LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                LazyColumn(
+                    state = listState,
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
                     items(filteredAndSorted, key = { it.number }) { issue ->
                         SwipeableIssueCard(
                             issue = issue,
@@ -484,12 +510,25 @@ fun IssuesTab(
                             onClick = { onIssueClick(issue.number) }
                         )
                     }
+                    // 加载更多 footer
+                    if (state.issuesLoadingMore) {
+                        item {
+                            Box(Modifier.fillMaxWidth().padding(8.dp), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = Coral)
+                            }
+                        }
+                    }
                 }
             }
         }
-
     }
-    
+
+    // 模板加载中指示（在顶部显示进度）
+    if (templatesLoading) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(color = Coral, modifier = Modifier.size(32.dp), strokeWidth = 2.5.dp)
+        }
+    }
     if (showCreateIssueDialog) {
         CreateIssueDialog(
             c = c,
@@ -775,7 +814,9 @@ fun IssueFieldItem(
                     Text(field.description, fontSize = 11.sp, color = c.textTertiary)
                 OutlinedTextField(
                     value = v, onValueChange = { fieldValues[field.id] = it },
-                    modifier = Modifier.fillMaxWidth(), singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 1,
+                    maxLines = 5,
                     placeholder = { Text(field.placeholder, color = c.textTertiary, fontSize = 13.sp) },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedContainerColor = c.bgDeep, unfocusedContainerColor = c.bgDeep,

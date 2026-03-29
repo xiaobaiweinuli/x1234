@@ -266,9 +266,18 @@ fun IssueDetailScreen(
             onConfirm = { text ->
                 if (text.isNotBlank()) {
                     val finalText = if (replyingToComment != null) {
-                        "> @${replyingToComment!!.user.login}\n\n$text"
+                        // GitHub 标准：每行加 "> " 前缀构成 blockquote，空行后写回复
+                        val quoted = replyingToComment!!.body
+                            .lines()
+                            .joinToString("\n") { "> $it" }
+                        "$quoted\n\n$text"
                     } else if (replyingToIssue) {
-                        "> @${state.issue?.user?.login}\n\n$text"
+                        val issueBody = state.issue?.body?.orEmpty() ?: ""
+                        val quoted = issueBody
+                            .lines()
+                            .take(10) // 只引用前10行，避免过长
+                            .joinToString("\n") { "> $it" }
+                        "$quoted\n\n$text"
                     } else {
                         text
                     }

@@ -125,6 +125,7 @@ interface GitHubApi {
         @Path("repo") repo: String,
         @Query("state") state: String = "open",
         @Query("per_page") perPage: Int = 30,
+        @Query("page") page: Int = 1,
     ): List<GHIssue>
 
     @POST("repos/{owner}/{repo}/issues")

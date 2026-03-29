@@ -54,6 +54,7 @@ object GraphQLClient {
                 updatedAt
                 primaryLanguage { name }
                 owner { login avatarUrl }
+                openIssues: issues(states: OPEN) { totalCount }
               }
             }
           }
@@ -101,6 +102,7 @@ object GraphQLClient {
                     updatedAt
                     primaryLanguage { name }
                     owner { login avatarUrl }
+                    openIssues: issues(states: OPEN) { totalCount }
                   }
                 }
               }

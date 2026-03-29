@@ -103,9 +103,50 @@ class RepoDetailViewModel(app: Application, savedStateHandle: SavedStateHandle) 
     private fun loadPRsAndIssues() = viewModelScope.launch {
         try {
             val prs = repository.getPRs(owner, repoName)
-            val issues = repository.getIssues(owner, repoName)
-            _state.update { it.copy(prs = prs, issues = issues) }
+            _state.update { it.copy(prs = prs) }
         } catch (_: Exception) {}
+        loadIssuesByState(forceRefresh = false)
+    }
+
+    /** 按当前筛选状态加载 Issues（第1页） */
+    fun loadIssuesByState(forceRefresh: Boolean = false) = viewModelScope.launch {
+        val stateStr = when (_state.value.issueFilterState.status) {
+            IssueStatusFilter.OPEN   -> "open"
+            IssueStatusFilter.CLOSED -> "closed"
+            IssueStatusFilter.ALL    -> "all"
+        }
+        try {
+            _state.update { it.copy(issuesPage = 1, issuesHasMore = false) }
+            val issues = repository.getIssues(owner, repoName, state = stateStr, page = 1, forceRefresh = forceRefresh)
+            _state.update { it.copy(
+                issues = issues,
+                issuesPage = 1,
+                issuesHasMore = issues.size >= 30,
+            )}
+        } catch (_: Exception) {}
+    }
+
+    /** 加载 Issues 下一页 */
+    fun loadMoreIssues() = viewModelScope.launch {
+        if (_state.value.issuesLoadingMore || !_state.value.issuesHasMore) return@launch
+        val nextPage = _state.value.issuesPage + 1
+        val stateStr = when (_state.value.issueFilterState.status) {
+            IssueStatusFilter.OPEN   -> "open"
+            IssueStatusFilter.CLOSED -> "closed"
+            IssueStatusFilter.ALL    -> "all"
+        }
+        _state.update { it.copy(issuesLoadingMore = true) }
+        try {
+            val more = repository.getIssues(owner, repoName, state = stateStr, page = nextPage)
+            _state.update { s -> s.copy(
+                issues = s.issues + more,
+                issuesPage = nextPage,
+                issuesHasMore = more.size >= 30,
+                issuesLoadingMore = false,
+            )}
+        } catch (_: Exception) {
+            _state.update { it.copy(issuesLoadingMore = false) }
+        }
     }
 
     /** 刷新分支列表 */
@@ -134,11 +175,9 @@ class RepoDetailViewModel(app: Application, savedStateHandle: SavedStateHandle) 
     fun refreshIssues() = viewModelScope.launch {
         _state.update { it.copy(issuesRefreshing = true) }
         try {
-            val issues = repository.getIssues(owner, repoName, forceRefresh = true)
-            _state.update { it.copy(issues = issues, issuesRefreshing = false) }
-        } catch (_: Exception) {
-            _state.update { it.copy(issuesRefreshing = false) }
-        }
+            loadIssuesByState(forceRefresh = true).join()
+        } catch (_: Exception) {}
+        _state.update { it.copy(issuesRefreshing = false) }
     }
 
     fun deleteIssue(issueNumber: Int) = viewModelScope.launch {
@@ -187,6 +226,7 @@ class RepoDetailViewModel(app: Application, savedStateHandle: SavedStateHandle) 
      */
     fun setIssueStatusFilter(status: IssueStatusFilter) {
         _state.update { it.copy(issueFilterState = it.issueFilterState.copy(status = status)) }
+        loadIssuesByState(forceRefresh = true)
     }
 
     /**
@@ -1008,11 +1048,16 @@ class RepoDetailViewModel(app: Application, savedStateHandle: SavedStateHandle) 
 
     // ── Issue Template 解析 ──────────────────────────────────────────────────
 
-    fun loadIssueTemplates() = viewModelScope.launch {
-        if (_state.value.issueTemplates.isNotEmpty()) return@launch // 已缓存
+    fun loadIssueTemplates(onDone: () -> Unit = {}) = viewModelScope.launch {
+        // 已有缓存直接回调
+        if (_state.value.issueTemplates.isNotEmpty() && !_state.value.issueTemplatesLoading) {
+            onDone()
+            return@launch
+        }
         _state.update { it.copy(issueTemplatesLoading = true) }
         val templates = repository.getIssueTemplates(owner, repoName)
         _state.update { it.copy(issueTemplates = templates, issueTemplatesLoading = false) }
+        onDone()
     }
 
     companion object {

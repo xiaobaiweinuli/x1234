@@ -73,6 +73,10 @@ data class RepoDetailState(
     val issuesRefreshing: Boolean = false,
     // Issues筛选状态
     val issueFilterState: IssueFilterState = IssueFilterState(),
+    // Issues分页状态
+    val issuesPage: Int = 1,
+    val issuesHasMore: Boolean = false,
+    val issuesLoadingMore: Boolean = false,
     // README
     val readmeLoading: Boolean = false,
     val readmeContent: String? = null,

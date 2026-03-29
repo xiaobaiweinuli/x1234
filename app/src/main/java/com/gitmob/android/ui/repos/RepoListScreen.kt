@@ -472,16 +472,24 @@ private fun StarredRepoCard(
                 }
             }
             Spacer(Modifier.weight(1f))
-            // 所有者
-            Text(
-                repo.ownerLogin,
-                fontSize = 10.5.sp,
-                color = BlueColor,
-                fontFamily = FontFamily.Monospace,
-                modifier = Modifier
-                    .background(BlueDim, RoundedCornerShape(20.dp))
-                    .padding(horizontal = 7.dp, vertical = 2.dp),
-            )
+            // 打开的 Issues 数（> 0 才显示，与远程仓库卡片一致）
+            if (repo.openIssues > 0) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Icon(Icons.Default.ErrorOutline, null, tint = c.textTertiary, modifier = Modifier.size(12.dp))
+                    Text("${repo.openIssues}", fontSize = 11.sp, color = c.textTertiary)
+                }
+            }
+            // 默认分支标签（与远程仓库卡片一致）
+            if (repo.defaultBranch.isNotBlank()) {
+                Text(
+                    text = repo.defaultBranch,
+                    fontSize = 10.5.sp, color = BlueColor,
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier
+                        .background(BlueDim, RoundedCornerShape(20.dp))
+                        .padding(horizontal = 7.dp, vertical = 2.dp),
+                )
+            }
         }
     }
 }

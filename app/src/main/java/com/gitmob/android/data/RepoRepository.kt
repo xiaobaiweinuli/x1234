@@ -332,14 +332,19 @@ class RepoRepository {
             result
         }
 
-    suspend fun getIssues(owner: String, repo: String, forceRefresh: Boolean = false): List<GHIssue> =
-        withContext(Dispatchers.IO) {
-            val key = "$owner/$repo"
-            if (!forceRefresh) issueCache[key]?.takeIf { it.valid(LIST_TTL) }?.data?.let { return@withContext it }
-            val result = api.getIssues(owner, repo)
-            issueCache[key] = Entry(result)
-            result
-        }
+    suspend fun getIssues(
+        owner: String, repo: String,
+        state: String = "open",
+        page: Int = 1,
+        forceRefresh: Boolean = false,
+    ): List<GHIssue> = withContext(Dispatchers.IO) {
+        val key = "$owner/$repo/$state/$page"
+        if (!forceRefresh && page == 1)
+            issueCache[key]?.takeIf { it.valid(LIST_TTL) }?.data?.let { return@withContext it }
+        val result = api.getIssues(owner, repo, state = state, perPage = 30, page = page)
+        if (page == 1) issueCache[key] = Entry(result)
+        result
+    }
 
     suspend fun getIssue(owner: String, repo: String, issueNumber: Int): GHIssue =
         withContext(Dispatchers.IO) { api.getIssue(owner, repo, issueNumber) }

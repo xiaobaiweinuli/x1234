@@ -29,7 +29,8 @@ data class StarredRepo(
     val ownerLogin: String,
     val ownerAvatarUrl: String?,
     val pushedAt: String?,
-    val listIds: List<String>,   // 所属 UserList ID 列表
+    val listIds: List<String> = emptyList(),   // 所属 UserList ID 列表
+    val openIssues: Int = 0,
 ) {
     /** 转为 GHRepo（供现有 RepoCardContent 展示） */
     fun toGHRepo(): GHRepo {
@@ -50,7 +51,7 @@ data class StarredRepo(
             defaultBranch = defaultBranch,
             stars         = stars,
             forks         = forks,
-            openIssues    = 0,
+            openIssues    = openIssues,
             updatedAt     = pushedAt,
             pushedAt      = pushedAt,
             language      = language,
@@ -91,5 +92,6 @@ fun JSONObject.toStarredRepo(): StarredRepo? {
         ownerAvatarUrl = optJSONObject("owner")?.optString("avatarUrl"),
         pushedAt       = optString("pushedAt").takeIf { it.isNotBlank() },
         listIds        = listIds,
+        openIssues     = optJSONObject("openIssues")?.optInt("totalCount") ?: 0,
     )
 }
